@@ -1,7 +1,7 @@
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPalette, QColor
-from gui.main_window import MainWindow
+from mediavault.gui.main_window import MainWindow
 
 # Ein einfaches, modernes Dark-Theme für PyQt6
 DARK_STYLE = """

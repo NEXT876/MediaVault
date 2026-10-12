@@ -3,10 +3,10 @@ from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPus
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 
-from models import MediaDatabase, MediaItem
-from utils import OSHelper
-from gui.widgets import MediaCard
-from gui.dialogs import DetailDialog, EditDialog, GroupRandomDialog
+from mediavault.models import MediaDatabase, MediaItem
+from mediavault.utils import OSHelper
+from mediavault.gui.widgets import MediaCard
+from mediavault.gui.dialogs import DetailDialog, EditDialog, GroupRandomDialog
 
 class MainWindow(QMainWindow):
     def __init__(self):
