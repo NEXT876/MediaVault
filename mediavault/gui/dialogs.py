@@ -2,8 +2,8 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButt
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 import time
-from models import MediaItem
-from utils import OSHelper
+from mediavault.models import MediaItem
+from mediavault.utils import OSHelper
 
 class DetailDialog(QDialog):
     def __init__(self, parent, entry, db, get_pixmap_func):
