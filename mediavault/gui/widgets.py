@@ -1,16 +1,25 @@
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QLabel, QCheckBox
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 class MediaCard(QFrame):
+    """Kachel-Widget, das einen Medien-Eintrag mit Bild, Titel und Score zeigt."""
+
     # Qt Signals für saubere Kommunikation mit dem Hauptfenster
-    clicked = pyqtSignal(object) 
+    double_clicked = pyqtSignal(object)
     selection_changed = pyqtSignal(object, bool)
 
     def __init__(self, entry, pixmap):
+        """Erstellt die Kachel für einen Eintrag mit optionalem Vorschaubild."""
         super().__init__()
         self.entry = entry
         self.setFixedSize(180, 240)
         self.setObjectName("MediaCard") # Für CSS Styling
+
+        self._pending_single_click = False
+        self.click_timer = QTimer(self)
+        self.click_timer.setSingleShot(True)
+        self.click_timer.setInterval(200)
+        self.click_timer.timeout.connect(self._handle_single_click)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
@@ -44,15 +53,49 @@ class MediaCard(QFrame):
         self.score_lbl.setStyleSheet("color: #3b8ed0; font-size: 12px;")
         layout.addWidget(self.score_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-    def _on_checkbox_toggled(self, state):
-        is_checked = (state == Qt.CheckState.Checked.value)
-        self.selection_changed.emit(self.entry, is_checked)
-        self.setStyleSheet("QFrame#MediaCard { border: 2px solid #3b8ed0; background-color: #2a2a2a; }" if is_checked else "")
+    def _update_visual_state(self, is_checked):
+        """Hebt die Kachel bei aktivierter Auswahl optisch hervor."""
+        self.setStyleSheet(
+            "QFrame#MediaCard { border: 2px solid #3b8ed0; background-color: #2a2a2a; }"
+            if is_checked else ""
+        )
 
-    def set_checked(self, state: bool):
+    def _on_checkbox_toggled(self, state):
+        """Sendet Auswahländerung und hebt die Kachel bei Aktivierung hervor."""
+        is_checked = (state == Qt.CheckState.Checked.value)
+        self._update_visual_state(is_checked)
+        self.selection_changed.emit(self.entry, is_checked)
+
+    def set_checked(self, state: bool, emit=True):
+        """Setzt den Auswahlstatus der Kachel-Checkbox."""
+        if self.checkbox.isChecked() == state:
+            self._update_visual_state(state)
+            return
+
+        if not emit:
+            self.checkbox.blockSignals(True)
         self.checkbox.setChecked(state)
+        if not emit:
+            self.checkbox.blockSignals(False)
+            self._update_visual_state(state)
 
     def mousePressEvent(self, event):
-        # Klick auf die Kachel öffnet die Details (außer man trifft exakt die Checkbox)
+        """Startet den Timer für einen einfachen Klick (Toggle der Auswahl)."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.entry)
+            self._pending_single_click = True
+            self.click_timer.start()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """Öffnet bei Doppelklick die Detailansicht des Eintrags."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pending_single_click = False
+            self.click_timer.stop()
+            self.double_clicked.emit(self.entry)
+        super().mouseDoubleClickEvent(event)
+
+    def _handle_single_click(self):
+        """Toggelt die Auswahl, wenn kein Doppelklick gefolgt ist."""
+        if self._pending_single_click:
+            self._pending_single_click = False
+            self.checkbox.toggle()

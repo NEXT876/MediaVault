@@ -1,0 +1,12 @@
+[project]
+name = "mediavault"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["PyQt6>=6.4", "opencv-python>=4.8"]
+
+[project.scripts]
+mediavault = "mediavault.__main__:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"

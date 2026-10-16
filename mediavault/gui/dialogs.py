@@ -1,12 +1,14 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QFileDialog, QScrollArea, QWidget, QCheckBox, QMessageBox
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
 import time
 from mediavault.models import MediaItem
 from mediavault.utils import OSHelper
 
 class DetailDialog(QDialog):
+    """Dialog mit Vorschau, Statistiken und Bewertungsbuttons für einen Eintrag."""
+
     def __init__(self, parent, entry, db, get_pixmap_func):
+        """Initialisiert den Detaildialog für den übergebenen Eintrag."""
         super().__init__(parent)
         self.entry = entry
         self.db = db
@@ -17,6 +19,7 @@ class DetailDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self):
+        """Erstellt das Layout mit Bild, Infos, Rating und Bearbeiten-Button."""
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -73,9 +76,11 @@ class DetailDialog(QDialog):
         layout.addWidget(btn_edit)
 
     def _get_stats_text(self):
+        """Formatiert Score und Zähler als Statistik-Text."""
         return f"Score: {self.entry.score}/100  |  Watched: {self.entry.watched_counter}"
 
     def _play_media(self):
+        """Öffnet die Mediendatei und aktualisiert Zähler sowie Zeitstempel."""
         path = self.entry.video_link if self.entry.entry_type == "Videos" else self.entry.image_path
         OSHelper.open_file(path)
         self.entry.watched_counter += 1
@@ -84,6 +89,7 @@ class DetailDialog(QDialog):
         self.lbl_stats.setText(self._get_stats_text())
 
     def _apply_rating(self, rating):
+        """Passt den Score anhand der Bewertung (1-5) an und speichert."""
         adjustments = {1: -10, 2: -5, 3: 0, 4: 5, 5: 10}
         self.entry.score = max(1, min(100, self.entry.score + adjustments[rating]))
         self.entry.watched_counter += 1
@@ -93,11 +99,15 @@ class DetailDialog(QDialog):
         self.lbl_stats.setText(self._get_stats_text())
 
     def _trigger_edit(self):
+        """Markiert den Wunsch zu bearbeiten und schließt den Dialog."""
         self.edit_requested = True
         self.accept()
 
 class EditDialog(QDialog):
+    """Dialog zum Erstellen oder Bearbeiten eines Medien-Eintrags."""
+
     def __init__(self, parent, db, entry_type, entry=None):
+        """Initialisiert den Bearbeiten-Dialog für einen neuen oder bestehenden Eintrag."""
         super().__init__(parent)
         self.db = db
         self.entry = entry
@@ -108,6 +118,7 @@ class EditDialog(QDialog):
         self._populate()
 
     def _build_ui(self):
+        """Erstellt die Eingabefelder für Titel, Gruppe, Beschreibung, Score und Pfade."""
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel("Titel:"))
@@ -153,6 +164,7 @@ class EditDialog(QDialog):
         layout.addWidget(btn_save)
 
     def _populate(self):
+        """Füllt die Eingabefelder mit den Werten eines bestehenden Eintrags."""
         if self.entry:
             self.inp_title.setText(self.entry.title)
             self.inp_group.setCurrentText(self.entry.group)
@@ -163,20 +175,27 @@ class EditDialog(QDialog):
                 self.inp_video.setText(self.entry.video_link)
 
     def _choose_vid(self):
+        """Öffnet einen Dateidialog zur Auswahl einer Videodatei."""
         path, _ = QFileDialog.getOpenFileName(self, "Video wählen", "", "Videos (*.mp4 *.mkv *.avi *.mov *.webm)")
-        if path: self.inp_video.setText(path)
+        if path:
+            self.inp_video.setText(path)
 
     def _choose_img(self):
+        """Öffnet einen Dateidialog zur Auswahl einer Bilddatei."""
         path, _ = QFileDialog.getOpenFileName(self, "Bild wählen", "", "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)")
-        if path: self.inp_img.setText(path)
+        if path:
+            self.inp_img.setText(path)
 
     def _save(self):
+        """Validiert die Eingaben und speichert den Eintrag in der Datenbank."""
         if not self.inp_title.text().strip():
             QMessageBox.warning(self, "Fehler", "Titel ist erforderlich.")
             return
 
-        try: score = max(1, min(100, int(self.inp_score.text())))
-        except ValueError: score = 50
+        try:
+            score = max(1, min(100, int(self.inp_score.text())))
+        except ValueError:
+            score = 50
 
         title = self.inp_title.text().strip()
         group = self.inp_group.currentText().strip()
@@ -198,7 +217,10 @@ class EditDialog(QDialog):
         self.accept()
 
 class GroupRandomDialog(QDialog):
+    """Dialog zur Auswahl von Gruppen und Medientypen für einen Zufallspick."""
+
     def __init__(self, parent, db):
+        """Initialisiert den Gruppen-Zufallsdialog mit der Datenbank."""
         super().__init__(parent)
         self.db = db
         self.result_pool = []
@@ -208,6 +230,7 @@ class GroupRandomDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self):
+        """Erstellt die Gruppen-Checkboxen, Typauswahl und Aktionsbuttons."""
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Wähle Gruppen:</b>"))
 
@@ -246,10 +269,17 @@ class GroupRandomDialog(QDialog):
         layout.addLayout(hl2)
 
     def _execute(self, smart):
+        """Baut den Auswahl-Pool aus Gruppen/Typen und schließt den Dialog."""
         sel_grps = [g for g, cb in self.group_boxes.items() if cb.isChecked()]
         sel_types = []
-        if self.cb_img.isChecked(): sel_types.append("Bilder")
-        if self.cb_vid.isChecked(): sel_types.append("Videos")
+        if self.cb_img.isChecked():
+            sel_types.append("Bilder")
+        if self.cb_vid.isChecked():
+            sel_types.append("Videos")
+
+        if not sel_grps or not sel_types:
+            QMessageBox.warning(self, "Hinweis", "Bitte mindestens eine Gruppe und einen Typ wählen.")
+            return
 
         self.result_pool = [e for e in self.db.entries if e.group in sel_grps and e.entry_type in sel_types]
         self.smart = smart
