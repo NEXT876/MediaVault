@@ -1,12 +1,16 @@
-import os
-import sys
-import shutil
-import pathlib
 import hashlib
+import logging
+import os
+import pathlib
+import shutil
 import subprocess
-from PyQt6.QtGui import QDesktopServices, QPixmap, QImage
+import sys
+
 from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QDesktopServices, QImage, QPixmap
 from PyQt6.QtWidgets import QFileDialog
+
+logger = logging.getLogger(__name__)
 
 try:
     import cv2
@@ -23,7 +27,7 @@ class OSHelper:
         if not path:
             return
         # Qt hat eine plattformunabhängige native Methode zum Öffnen von Dateien/URLs
-        if path.startswith("http://") or path.startswith("https://"):
+        if path.startswith(("http://", "https://")):
             QDesktopServices.openUrl(QUrl(path))
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
@@ -55,11 +59,11 @@ class OSHelper:
                     cmd += ["--filename", start_dir + os.sep]
 
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode == 0:
                     return result.stdout.strip(), ""
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError):
+                logger.debug("Nativer Dateidialog fehlgeschlagen, nutze Qt-Dialog", exc_info=True)
 
         return QFileDialog.getOpenFileName(parent, title, start_dir, file_filter)
 
@@ -86,12 +90,12 @@ class OSHelper:
                     cmd += ["--filename", start_dir + os.sep]
 
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode == 0:
                     paths = [p for p in result.stdout.strip().split("\n") if p]
                     return paths, ""
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError):
+                logger.debug("Nativer Dateidialog fehlgeschlagen, nutze Qt-Dialog", exc_info=True)
 
         return QFileDialog.getOpenFileNames(parent, title, start_dir, file_filter)
 
@@ -109,8 +113,8 @@ class OSHelper:
                 thumb_path = os.path.join(cache_dir, size, f"{hash_md5}.png")
                 if os.path.exists(thumb_path):
                     return thumb_path
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            logger.debug("System-Thumbnail konnte nicht ermittelt werden", exc_info=True)
         return ""
 
     @staticmethod
@@ -132,6 +136,6 @@ class OSHelper:
                 bytes_per_line = ch * w
                 qimg = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
                 return QPixmap.fromImage(qimg)
-        except Exception:
-            pass
+        except cv2.error:
+            logger.debug("Videoframe konnte nicht extrahiert werden", exc_info=True)
         return None

@@ -5,6 +5,9 @@ import random
 import shutil
 import time
 
+logger = logging.getLogger(__name__)
+
+
 class MediaItem:
     """Repräsentiert einen einzelnen Medien-Eintrag (Bild oder Video)."""
 
@@ -59,11 +62,11 @@ class MediaDatabase:
                 data = json.load(f)
                 self.entries = [MediaItem.from_dict(item) for item in data]
         except json.JSONDecodeError:
-            logging.error(f"JSON beschädigt: {self.filepath}")
+            logger.error(f"JSON beschädigt: {self.filepath}")
             backup = f"{self.filepath}.corrupt.{int(time.time())}"
             try:
                 shutil.copy(self.filepath, backup)
-                logging.error(f"Backup angelegt: {backup}")
+                logger.info(f"Backup angelegt: {backup}")
             except OSError:
                 pass
 
@@ -93,7 +96,7 @@ class MediaDatabase:
     def get_all_groups(self):
         """Gibt eine sortierte Liste aller nicht-leeren Gruppennamen zurück."""
         groups = {e.group for e in self.entries if getattr(e, 'group', "").strip()}
-        return sorted(list(groups))
+        return sorted(groups)
 
     def get_random(self, pool, smart=False, recent_picks=None):
         """Wählt zufällig einen Eintrag aus dem Pool, optional gewichtet (smart)."""
