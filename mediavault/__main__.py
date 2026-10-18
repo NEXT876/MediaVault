@@ -1,3 +1,5 @@
+"""Application entry point."""
+
 import sys
 
 from PyQt6.QtCore import QCoreApplication, Qt, QTimer
@@ -9,8 +11,8 @@ from mediavault.gui.main_window import MainWindow
 from mediavault.gui.theme import ThemeManager
 
 
-def _build_splash_pixmap(colors):
-    """Erzeugt ein Splash-Bild passend zum aktiven Theme."""
+def _build_splash_pixmap(colors: dict[str, str]) -> QPixmap:
+    """Build a splash image matching the active theme."""
     pixmap = QPixmap(420, 240)
     pixmap.fill(QColor(colors["bg"]))
 
@@ -32,8 +34,8 @@ def _build_splash_pixmap(colors):
     return pixmap
 
 
-def main():
-    """Startet die Qt-Anwendung mit gespeichertem Theme und Splash-Screen."""
+def main() -> None:
+    """Start the Qt application with the stored theme and a splash screen."""
     setup_logging()
     QCoreApplication.setOrganizationName("MediaVault")
     QCoreApplication.setApplicationName("MediaVault")
@@ -50,8 +52,8 @@ def main():
 
     window = MainWindow(theme)
 
-    # Splash mindestens 1,2 s sichtbar halten, damit er nicht nur aufblitzt.
-    def _show_main():
+    # Keep the splash visible for at least 1.2 s so it does not just flash.
+    def _show_main() -> None:
         window.show()
         splash.finish(window)
 
