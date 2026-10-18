@@ -1,10 +1,12 @@
-"""Hauptfenster von MediaVault."""
+"""Main window of MediaVault."""
 
 import logging
 import os
+from collections.abc import Callable, Iterable
+from typing import Any
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
-from PyQt6.QtGui import QKeySequence, QPixmap
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
+from PyQt6.QtGui import QKeyEvent, QKeySequence, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -23,8 +25,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mediavault.config import DEFAULT_DB_PATH
-from mediavault.gui.dialogs import DetailDialog, EditDialog, GroupRandomDialog
+from mediavault.ai_meta import ai_duplicate_key, extract_ai_metadata
+from mediavault.config import IMAGE_EXTS, MODE_AI, find_new_images, load_configs
+from mediavault.gui.dialogs import (
+    AnalysisDialog,
+    ConfigDialog,
+    DetailDialog,
+    EditDialog,
+    GroupRandomDialog,
+)
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
 from mediavault.models import MediaDatabase, MediaItem
@@ -32,38 +41,89 @@ from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
 
+ALL_GROUPS = "Alle Gruppen"
+
+
+def _norm_path(path: str) -> str:
+    """Normalize a file path for duplicate checks."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def visible_entries(
+    entries: Iterable[MediaItem],
+    group_filter: str,
+    query: str,
+    sort_mode: str,
+) -> list[MediaItem]:
+    """Filter entries by group and text, then sort them for the card grid."""
+    entries = list(entries)
+
+    if group_filter and group_filter != ALL_GROUPS:
+        entries = [entry for entry in entries if entry.group == group_filter]
+
+    needle = query.strip().casefold()
+    if needle:
+        entries = [
+            entry
+            for entry in entries
+            if needle in (entry.title or "").casefold()
+            or needle in (entry.description or "").casefold()
+            or needle in (entry.group or "").casefold()
+            or needle in (entry.ai_meta.get("prompt") or "").casefold()
+            or needle in (entry.ai_meta.get("negative_prompt") or "").casefold()
+        ]
+
+    if sort_mode == "score_desc":
+        entries.sort(key=lambda entry: (-entry.score, entry.title.casefold()))
+    elif sort_mode == "score_asc":
+        entries.sort(key=lambda entry: (entry.score, entry.title.casefold()))
+    elif sort_mode == "last_watched":
+        entries.sort(
+            key=lambda entry: (entry.last_watched > 0, entry.last_watched),
+            reverse=True,
+        )
+    else:
+        entries.sort(key=lambda entry: entry.title.casefold())
+    return entries
+
 
 class MainWindow(QMainWindow):
-    """Hauptfenster mit Sidebar, Filterleiste, Kachel-Grid und Batch-Aktionen."""
+    """Main window with sidebar, filter bar, card grid and batch actions."""
 
     GRID_SPACING = 12
     SCROLLBAR_RESERVE = 12
     AUTOSCROLL_MARGIN = 24
     AUTOSCROLL_STEP = 28
 
-    def __init__(self, theme_manager=None):
-        """Initialisiert Datenbank, Zustand und die komplette Benutzeroberfläche."""
+    def __init__(self, theme_manager: ThemeManager | None = None) -> None:
+        """Initialize the database, view state and the full user interface."""
         super().__init__()
         self.setWindowTitle("MediaVault")
         self.resize(1180, 820)
 
-        self.db = MediaDatabase(DEFAULT_DB_PATH)
+        self.configs, last = load_configs()
+        self.config = next(
+            (config for config in self.configs if config.db_path == last),
+            self.configs[0],
+        )
+
+        self.db = MediaDatabase(self.config.db_path)
         self.db.load()
 
         self.theme = theme_manager or ThemeManager()
-        self.current_view = "Bilder"
-        self.selected_entries = set()
-        self.recent_picks = []
-        self.thumbnail_cache = {}
-        self.cards = []
+        self.current_view: str = "Bilder"
+        self.selected_entries: set[MediaItem] = set()
+        self.recent_picks: list[MediaItem] = []
+        self.thumbnail_cache: dict[str, QPixmap | None] = {}
+        self.cards: list[MediaCard] = []
         self.current_cols = 1
 
-        self._anchor_entry = None
-        self._press_snapshot = set()
-        self._drag_base = set()
-        self._drag_origin_global = None
-        self._last_drag_global = None
-        self._rubber_band = None
+        self._anchor_entry: MediaItem | None = None
+        self._press_snapshot: set[MediaItem] = set()
+        self._drag_base: set[MediaItem] = set()
+        self._drag_origin_global: QPoint | None = None
+        self._last_drag_global: QPoint | None = None
+        self._rubber_band: QRubberBand | None = None
         self._autoscroll_direction = 0
 
         self._autoscroll_timer = QTimer(self)
@@ -77,11 +137,13 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._sync_theme_button()
+        self._apply_config_ui()
+        self._scan_folder()
         self.refresh_data()
 
-    # --- UI-Aufbau ---
-    def _setup_ui(self):
-        """Baut Sidebar, Top-Bar, Action-Bar und das scrollbare Kachel-Grid auf."""
+    # --- UI construction ---
+    def _setup_ui(self) -> None:
+        """Build the sidebar, top bar, action bar and scrollable card grid."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
@@ -114,6 +176,11 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self.btn_bilder)
         side_layout.addWidget(self.btn_videos)
 
+        self.lbl_analysis_section = self._create_section_label("KI-ANALYSE")
+        side_layout.addWidget(self.lbl_analysis_section)
+        self.btn_analysis = self._create_side_btn("📊  Analyse", self._open_analysis)
+        side_layout.addWidget(self.btn_analysis)
+
         side_layout.addWidget(self._create_section_label("ZUFALL (LOKAL)"))
         side_layout.addWidget(
             self._create_side_btn("🎲  Normal", lambda: self._do_random(False, False))
@@ -127,13 +194,19 @@ class MainWindow(QMainWindow):
             self._create_side_btn("🌍  Alles", lambda: self._do_random(False, True))
         )
         side_layout.addWidget(
-            self._create_side_btn("⚖️🌍  Alles Smart", lambda: self._do_random(True, True))
+            self._create_side_btn(
+                "⚖️🌍  Alles Smart", lambda: self._do_random(True, True)
+            )
         )
         side_layout.addWidget(
             self._create_side_btn("📂  Aus Gruppen", self._open_group_random)
         )
 
         side_layout.addStretch()
+
+        side_layout.addWidget(
+            self._create_side_btn("⚙️  Config wechseln", self._switch_config)
+        )
 
         self.btn_theme = QPushButton()
         self.btn_theme.setProperty("nav", True)
@@ -260,15 +333,17 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(content, 1)
 
-    def _create_section_label(self, text):
-        """Erzeugt ein gedämpftes Abschnittslabel für die Sidebar."""
+    def _create_section_label(self, text: str) -> QLabel:
+        """Create a muted section label for the sidebar."""
         label = QLabel(text)
         label.setObjectName("SectionLabel")
         label.setContentsMargins(4, 10, 0, 2)
         return label
 
-    def _create_side_btn(self, text, callback, checkable=False):
-        """Erzeugt einen linksbündigen Sidebar-Button mit Callback."""
+    def _create_side_btn(
+        self, text: str, callback: Callable[[], None], checkable: bool = False
+    ) -> QPushButton:
+        """Create a left-aligned sidebar button wired to ``callback``."""
         btn = QPushButton(text)
         btn.setProperty("nav", True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -278,9 +353,9 @@ class MainWindow(QMainWindow):
         btn.clicked.connect(callback)
         return btn
 
-    # --- Daten und Ansicht ---
-    def switch_view(self, view):
-        """Wechselt zwischen Bilder- und Videos-Ansicht und lädt neu."""
+    # --- Data and view ---
+    def switch_view(self, view: str) -> None:
+        """Switch between the image and video views and reload the grid."""
         self.current_view = view
         self.btn_bilder.setChecked(view == "Bilder")
         self.btn_videos.setChecked(view == "Videos")
@@ -290,9 +365,76 @@ class MainWindow(QMainWindow):
         self._anchor_entry = None
         self.refresh_data()
 
-    def _get_pixmap(self, entry):
-        """Liefert das Vorschaubild eines Eintrags, gecacht im Thumbnail-Cache."""
-        key = entry.image_path or entry.video_link
+    def _apply_config_ui(self) -> None:
+        """Show only the controls that fit the active config's mode."""
+        ai = self.config.mode == MODE_AI
+        self.btn_videos.setVisible(not ai)
+        self.lbl_analysis_section.setVisible(ai)
+        self.btn_analysis.setVisible(ai)
+        self.current_view = "Bilder"
+        self.btn_bilder.setChecked(True)
+        self.lbl_view_title.setText("🖼️ Bilder")
+        self.inp_search.setPlaceholderText(
+            "Titel, Beschreibung, Prompt suchen…"
+            if ai
+            else "Titel, Beschreibung, Gruppe suchen…"
+        )
+        suffix = " · KI" if ai else ""
+        self.setWindowTitle(f"MediaVault – {self.config.name}{suffix}")
+
+    def _scan_folder(self) -> None:
+        """Import images from the config's folder, using the DB as the cache."""
+        if not self.config.folder:
+            return
+        ai = self.config.mode == MODE_AI
+        known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
+        paths = find_new_images(
+            self.config.folder, known, {".png"} if ai else IMAGE_EXTS
+        )
+        entries: list[MediaItem] = []
+        seen_keys: set[tuple[str, str, str, str]] = set()
+        for path in paths:
+            entry = self._make_entry(path, "Bilder", "")
+            if entry is None or self._is_duplicate(path, "Bilder", entry.ai_meta):
+                continue
+            key = ai_duplicate_key(entry.ai_meta)
+            if key is not None:
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+            entries.append(entry)
+        if entries:
+            self.db.add_many(entries)
+
+    def _is_duplicate(self, path: str, type_str: str, meta: dict[str, Any]) -> bool:
+        """Return True if the file or the AI generation is already stored."""
+        entries = self.db.get_by_type(type_str)
+        normalized = _norm_path(path)
+        if any(
+            entry.media_path and _norm_path(entry.media_path) == normalized
+            for entry in entries
+        ):
+            return True
+        key = ai_duplicate_key(meta)
+        return key is not None and any(
+            ai_duplicate_key(entry.ai_meta) == key for entry in entries
+        )
+
+    def _make_entry(self, path: str, type_str: str, group: str) -> MediaItem | None:
+        """Build an entry from a file, requiring AI metadata in AI configs."""
+        meta: dict[str, Any] = {}
+        if self.config.mode == MODE_AI:
+            meta = extract_ai_metadata(path) or {}
+            if not meta:
+                logger.info("Kein KI-Bild, übersprungen: %s", path)
+                return None
+        title = os.path.splitext(os.path.basename(path))[0]
+        img, vid = (path, "") if type_str == "Bilder" else ("", path)
+        return MediaItem(title, img, 50, "", type_str, vid, group=group, ai_meta=meta)
+
+    def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
+        """Return an entry's preview pixmap, cached by its media path."""
+        key = entry.media_path
         if key not in self.thumbnail_cache:
             pixmap = None
             if entry.image_path:
@@ -313,48 +455,25 @@ class MainWindow(QMainWindow):
             self.thumbnail_cache[key] = pixmap
         return self.thumbnail_cache[key]
 
-    def _visible_entries(self):
-        """Liefert die sichtbaren Einträge nach Gruppenfilter, Suche und Sortierung."""
-        entries = self.db.get_by_type(self.current_view)
+    def _visible_entries(self) -> list[MediaItem]:
+        """Return the entries currently visible after filtering and sorting."""
+        return visible_entries(
+            self.db.get_by_type(self.current_view),
+            self.combo_group.currentText(),
+            self.inp_search.text(),
+            self.combo_sort.currentData(),
+        )
 
-        filter_grp = self.combo_group.currentText()
-        if filter_grp and filter_grp != "Alle Gruppen":
-            entries = [entry for entry in entries if entry.group == filter_grp]
-
-        query = self.inp_search.text().strip().casefold()
-        if query:
-            entries = [
-                entry
-                for entry in entries
-                if query in (entry.title or "").casefold()
-                or query in (entry.description or "").casefold()
-                or query in (entry.group or "").casefold()
-            ]
-
-        sort_mode = self.combo_sort.currentData()
-        if sort_mode == "score_desc":
-            entries.sort(key=lambda entry: (-entry.score, entry.title.casefold()))
-        elif sort_mode == "score_asc":
-            entries.sort(key=lambda entry: (entry.score, entry.title.casefold()))
-        elif sort_mode == "last_watched":
-            entries.sort(
-                key=lambda entry: (entry.last_watched > 0, entry.last_watched),
-                reverse=True,
-            )
-        else:
-            entries.sort(key=lambda entry: entry.title.casefold())
-        return entries
-
-    def refresh_data(self, *_args):
-        """Aktualisiert Filter, Kacheln und Grid anhand der aktuellen Ansicht."""
+    def refresh_data(self, *_args: object) -> None:
+        """Refresh the group filter, cards and grid for the current view."""
         self._cancel_drag()
 
         current_filter = self.combo_group.currentText()
         groups = self.db.get_all_groups()
         self.combo_group.blockSignals(True)
         self.combo_group.clear()
-        self.combo_group.addItems(["Alle Gruppen"] + groups)
-        if current_filter in ["Alle Gruppen"] + groups:
+        self.combo_group.addItems([ALL_GROUPS] + groups)
+        if current_filter in [ALL_GROUPS] + groups:
             self.combo_group.setCurrentText(current_filter)
         self.combo_group.blockSignals(False)
 
@@ -390,13 +509,13 @@ class MainWindow(QMainWindow):
         self._update_action_bar()
 
     # --- Grid ---
-    def resizeEvent(self, event):
-        """Passt die Spaltenanzahl des Grids an die Fensterbreite an."""
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Recalculate the grid's column count when the window is resized."""
         super().resizeEvent(event)
         self._update_columns()
 
-    def eventFilter(self, obj, event):
-        """Reagiert auf Breitenänderungen des Scroll-Viewports."""
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """React to width changes of the scroll viewport."""
         if (
             hasattr(self, "scroll_area")
             and obj is self.scroll_area.viewport()
@@ -405,14 +524,14 @@ class MainWindow(QMainWindow):
             self._update_columns()
         return super().eventFilter(obj, event)
 
-    def changeEvent(self, event):
-        """Bricht eine laufende Rechteckauswahl beim Fensterwechsel ab."""
+    def changeEvent(self, event: QEvent) -> None:
+        """Cancel an active rubber-band selection when the window deactivates."""
         if event.type() == QEvent.Type.WindowDeactivate:
             self._cancel_drag()
         super().changeEvent(event)
 
-    def _update_columns(self):
-        """Berechnet die Spaltenzahl aus der Viewport-Breite."""
+    def _update_columns(self) -> None:
+        """Compute the number of columns from the viewport width."""
         if not hasattr(self, "scroll_area"):
             return
         available = self.scroll_area.viewport().width() - self.SCROLLBAR_RESERVE
@@ -424,8 +543,8 @@ class MainWindow(QMainWindow):
             self.current_cols = cols
             self._reflow_grid()
 
-    def _reflow_grid(self):
-        """Ordnet die vorhandenen Kacheln neu im Grid an, ohne sie neu zu laden."""
+    def _reflow_grid(self) -> None:
+        """Reorder existing cards in the grid without recreating them."""
         while self.grid_layout.count():
             self.grid_layout.takeAt(0)
 
@@ -433,18 +552,20 @@ class MainWindow(QMainWindow):
             row, col = divmod(index, self.current_cols)
             self.grid_layout.addWidget(card, row, col)
 
-    # --- Auswahl ---
-    def _apply_selection(self, entries):
-        """Synchronisiert Auswahlmenge und Kartenoptik an einer Stelle."""
+    # --- Selection ---
+    def _apply_selection(self, entries: Iterable[MediaItem]) -> None:
+        """Synchronize the selection set and card appearance in one place."""
         self.selected_entries = set(entries)
         for card in self.cards:
             card.set_selected(card.entry in self.selected_entries)
         self._update_action_bar()
 
-    def _on_card_clicked(self, entry, modifiers):
-        """Toggelt eine Karte oder wählt bei Shift einen Bereich aus."""
-        # Änderung erst nach dem Snapshot: ein folgender Doppelklick kann sie
-        # so vollständig rückgängig machen.
+    def _on_card_clicked(
+        self, entry: MediaItem, modifiers: Qt.KeyboardModifier
+    ) -> None:
+        """Toggle a card, or select a range when Shift is held."""
+        # Snapshot before changing anything: a following double click can then
+        # fully undo the toggle caused by the first click.
         self._press_snapshot = set(self.selected_entries)
         if (
             modifiers & Qt.KeyboardModifier.ShiftModifier
@@ -455,9 +576,7 @@ class MainWindow(QMainWindow):
                 start = entries.index(self._anchor_entry)
                 end = entries.index(entry)
                 lo, hi = sorted((start, end))
-                self._apply_selection(
-                    self.selected_entries | set(entries[lo : hi + 1])
-                )
+                self._apply_selection(self.selected_entries | set(entries[lo : hi + 1]))
                 return
 
         new_selection = set(self.selected_entries)
@@ -468,27 +587,25 @@ class MainWindow(QMainWindow):
         self._apply_selection(new_selection)
         self._anchor_entry = entry
 
-    def _on_card_double_clicked(self, entry):
-        """Öffnet Details und macht das Toggeln des ersten Klicks rückgängig."""
+    def _on_card_double_clicked(self, entry: MediaItem) -> None:
+        """Open details and undo the toggle performed by the first click."""
         self._cancel_drag()
         self._apply_selection(self._press_snapshot)
         self._open_detail(entry)
 
-    def _select_all(self):
-        """Markiert alle sichtbaren Kacheln als ausgewählt."""
+    def _select_all(self) -> None:
+        """Mark all visible cards as selected."""
         self._apply_selection({card.entry for card in self.cards})
 
-    def _deselect_all(self):
-        """Hebt die Auswahl aller sichtbaren Kacheln auf."""
+    def _deselect_all(self) -> None:
+        """Clear the selection of all visible cards."""
         self._cancel_drag()
         self._apply_selection(set())
 
-    def _update_action_bar(self):
-        """Aktualisiert Auswahlzähler und den Zustand der Batch-Buttons."""
+    def _update_action_bar(self) -> None:
+        """Update the selection counter and batch button states."""
         count = len(self.selected_entries)
-        self.lbl_sel_count.setText(
-            f"{count} ausgewählt" if count else "Keine Auswahl"
-        )
+        self.lbl_sel_count.setText(f"{count} ausgewählt" if count else "Keine Auswahl")
         enabled = count > 0
         self.btn_batch_score.setEnabled(enabled)
         self.btn_batch_group.setEnabled(enabled)
@@ -497,9 +614,9 @@ class MainWindow(QMainWindow):
         self.btn_sel_all.setEnabled(bool(self.cards))
         self.lbl_hint.setVisible(count == 0)
 
-    # --- Rechteckauswahl ---
-    def _ensure_rubber_band(self):
-        """Erzeugt das Auswahlrechteck bei Bedarf."""
+    # --- Rubber-band selection ---
+    def _ensure_rubber_band(self) -> QRubberBand:
+        """Create the selection rectangle on first use."""
         if self._rubber_band is None:
             self._rubber_band = QRubberBand(
                 QRubberBand.Shape.Rectangle, self.scroll_area.viewport()
@@ -509,15 +626,15 @@ class MainWindow(QMainWindow):
             )
         return self._rubber_band
 
-    def _on_drag_pressed(self, entry, global_pos):
-        """Sichert die Ausgangsauswahl vor dem ersten Klick."""
+    def _on_drag_pressed(self, entry: MediaItem, global_pos: QPoint) -> None:
+        """Capture the starting selection before the first click."""
         self._press_snapshot = set(self.selected_entries)
         self._drag_base = set(self.selected_entries)
         self._drag_origin_global = global_pos
         self._last_drag_global = global_pos
 
-    def _on_drag_moved(self, global_pos):
-        """Zeichnet das Auswahlrechteck und markiert berührte Karten."""
+    def _on_drag_moved(self, global_pos: QPoint) -> None:
+        """Draw the selection rectangle and select the cards it touches."""
         if self._drag_origin_global is None:
             return
         self._last_drag_global = global_pos
@@ -535,12 +652,12 @@ class MainWindow(QMainWindow):
         self._apply_selection(self._drag_base | self._cards_intersecting(rect))
         self._update_autoscroll(current)
 
-    def _on_drag_finished(self):
-        """Beendet die Rechteckauswahl."""
+    def _on_drag_finished(self) -> None:
+        """Finish the rubber-band selection."""
         self._cancel_drag()
 
-    def _cancel_drag(self):
-        """Blendet das Auswahlrechteck aus und stoppt den Auto-Scroll."""
+    def _cancel_drag(self) -> None:
+        """Hide the selection rectangle and stop auto-scrolling."""
         self._autoscroll_timer.stop()
         self._autoscroll_direction = 0
         self._drag_origin_global = None
@@ -550,8 +667,8 @@ class MainWindow(QMainWindow):
             self._rubber_band.hide()
             self._rubber_band.setGeometry(QRect())
 
-    def _cards_intersecting(self, rect):
-        """Liefert alle Karten, die das Rechteck im Viewport schneidet."""
+    def _cards_intersecting(self, rect: QRect) -> set[MediaItem]:
+        """Return all cards intersecting ``rect`` in viewport coordinates."""
         viewport = self.scroll_area.viewport()
         hits = set()
         for card in self.cards:
@@ -560,8 +677,8 @@ class MainWindow(QMainWindow):
                 hits.add(card.entry)
         return hits
 
-    def _update_autoscroll(self, pos_in_viewport):
-        """Startet oder stoppt das Scrollen am oberen/unteren Rand."""
+    def _update_autoscroll(self, pos_in_viewport: QPoint) -> None:
+        """Start or stop scrolling at the top or bottom edge."""
         viewport = self.scroll_area.viewport()
         direction = 0
         if pos_in_viewport.y() < self.AUTOSCROLL_MARGIN:
@@ -574,8 +691,8 @@ class MainWindow(QMainWindow):
         elif not direction:
             self._autoscroll_timer.stop()
 
-    def _autoscroll_step(self):
-        """Scrollt während einer Rechteckauswahl schrittweise weiter."""
+    def _autoscroll_step(self) -> None:
+        """Advance the scroll position while a rubber-band selection is active."""
         if not self._autoscroll_direction or self._last_drag_global is None:
             self._autoscroll_timer.stop()
             return
@@ -587,9 +704,9 @@ class MainWindow(QMainWindow):
             return
         self._on_drag_moved(self._last_drag_global)
 
-    # --- Tastatur und Suche ---
-    def keyPressEvent(self, event):
-        """Verarbeitet Tastenkürzel für Auswahl, Löschen und Suche."""
+    # --- Keyboard and search ---
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle keyboard shortcuts for selection, deletion and search."""
         if event.matches(QKeySequence.StandardKey.SelectAll):
             self._select_all()
             event.accept()
@@ -613,36 +730,66 @@ class MainWindow(QMainWindow):
             return
         super().keyPressEvent(event)
 
-    def _schedule_search_refresh(self, _text=None):
-        """Verzögert den Neuaufbau des Grids während der Eingabe."""
+    def _schedule_search_refresh(self, _text: str | None = None) -> None:
+        """Debounce the grid rebuild while the user is typing."""
         if not self.inp_search.text():
             self._search_timer.stop()
             self.refresh_data()
         else:
             self._search_timer.start()
 
-    def _flush_search(self):
-        """Aktualisiert die Suche sofort (Enter)."""
+    def _flush_search(self) -> None:
+        """Refresh the search immediately (Enter)."""
         self._search_timer.stop()
         self.refresh_data()
 
     # --- Theme ---
-    def _sync_theme_button(self):
-        """Passt Beschriftung des Theme-Umschalters an."""
+    def _sync_theme_button(self) -> None:
+        """Update the theme toggle's label and tooltip."""
         dark = self.theme.name == "dark"
         self.btn_theme.setText("☀️  Helles Theme" if dark else "🌙  Dunkles Theme")
         self.btn_theme.setToolTip(
             "Zu hellem Theme wechseln" if dark else "Zu dunklem Theme wechseln"
         )
 
-    def _toggle_theme(self):
-        """Wechselt live zwischen Dark und Light."""
+    def _toggle_theme(self) -> None:
+        """Switch between dark and light theme at runtime."""
         self.theme.toggle(QApplication.instance())
         self._sync_theme_button()
 
-    # --- Aktionen ---
-    def _open_detail(self, entry):
-        """Öffnet den Detaildialog und merkt den Eintrag als letzten Pick."""
+    def _switch_config(self) -> None:
+        """Save the current database and open another vault config."""
+        self.db.save()
+        dlg = ConfigDialog(self, self.configs, self.config.db_path)
+        if not dlg.exec() or dlg.selected_config is None:
+            return
+
+        self.configs, last = load_configs()
+        self.config = next(
+            (config for config in self.configs if config.db_path == last),
+            dlg.selected_config,
+        )
+        self.db = MediaDatabase(self.config.db_path)
+        self.db.load()
+
+        self.thumbnail_cache.clear()
+        self.recent_picks = []
+        self.inp_search.blockSignals(True)
+        self.inp_search.clear()
+        self.inp_search.blockSignals(False)
+        self._apply_selection(set())
+        self._anchor_entry = None
+        self._apply_config_ui()
+        self._scan_folder()
+        self.refresh_data()
+
+    def _open_analysis(self) -> None:
+        """Open the local prompt statistics for the current config."""
+        AnalysisDialog(self, self.db).exec()
+
+    # --- Actions ---
+    def _open_detail(self, entry: MediaItem) -> None:
+        """Open the detail dialog and remember the entry as a recent pick."""
         if entry in self.recent_picks:
             self.recent_picks.remove(entry)
         self.recent_picks.append(entry)
@@ -656,40 +803,34 @@ class MainWindow(QMainWindow):
         else:
             self.refresh_data()
 
-    def _open_edit(self, entry):
-        """Öffnet den Bearbeiten-Dialog und lädt die Ansicht nach dem Speichern neu."""
+    def _open_edit(self, entry: MediaItem) -> None:
+        """Open the edit dialog and reload the view after saving."""
         dlg = EditDialog(self, self.db, entry.entry_type, entry)
         if dlg.exec():
             self.db.save()
-            key = entry.image_path or entry.video_link
-            if key in self.thumbnail_cache:
-                del self.thumbnail_cache[key]
+            self.thumbnail_cache.pop(entry.media_path, None)
             self.refresh_data()
 
-    def _create_new(self):
-        """Zeigt ein Menü zur Auswahl zwischen Einzel- und Massenanlage."""
+    def _create_new(self) -> None:
+        """Show a menu to choose between single and batch creation."""
+        options: list[tuple[str, Callable[[], None]]] = [
+            ("Bild einzeln", lambda: self._create_single("Bilder")),
+            ("Video einzeln", lambda: self._create_single("Videos")),
+            ("Bilder Massenimport", lambda: self._batch_import("Bilder")),
+            ("Videos Massenimport", lambda: self._batch_import("Videos")),
+        ]
+        if self.config.mode == MODE_AI:
+            options = [option for option in options if option[0].startswith("Bild")]
+        labels = [label for label, _action in options]
         choice, ok = QInputDialog.getItem(
-            self,
-            "Neu",
-            "Aktion wählen:",
-            ["Bild einzeln", "Video einzeln", "Bilder Massenimport", "Videos Massenimport"],
-            0,
-            False,
+            self, "Neu", "Aktion wählen:", labels, 0, False
         )
         if not ok:
             return
+        options[labels.index(choice)][1]()
 
-        if choice == "Bild einzeln":
-            self._create_single("Bilder")
-        elif choice == "Video einzeln":
-            self._create_single("Videos")
-        elif choice == "Bilder Massenimport":
-            self._batch_import("Bilder")
-        else:
-            self._batch_import("Videos")
-
-    def _create_single(self, type_str):
-        """Öffnet den nativen Datei-Explorer und legt danach einen Eintrag an."""
+    def _create_single(self, type_str: str) -> None:
+        """Open the native file picker and then create a single entry."""
         if type_str == "Bilder":
             file_filter = "Bilder (*.png *.jpg *.jpeg *.bmp *.webp);;Alle Dateien (*.*)"
         else:
@@ -699,7 +840,26 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        dlg = EditDialog(self, self.db, type_str)
+        meta: dict[str, Any] = {}
+        if self.config.mode == MODE_AI:
+            meta = extract_ai_metadata(path) or {}
+            if not meta:
+                QMessageBox.warning(
+                    self,
+                    "Kein KI-Bild",
+                    "In dieser Datei wurden keine KI-Metadaten gefunden.",
+                )
+                return
+
+        if self._is_duplicate(path, type_str, meta):
+            QMessageBox.information(
+                self,
+                "Bereits vorhanden",
+                "Dieses Medium ist bereits in der Sammlung.",
+            )
+            return
+
+        dlg = EditDialog(self, self.db, type_str, ai_meta=meta)
         if type_str == "Bilder":
             dlg.inp_img.setText(path)
         else:
@@ -709,8 +869,8 @@ class MainWindow(QMainWindow):
             self.db.save()
             self.refresh_data()
 
-    def _batch_import(self, type_str):
-        """Importiert mehrere Dateien als Einträge und überspringt Duplikate."""
+    def _batch_import(self, type_str: str) -> None:
+        """Import several files as entries, skipping duplicates."""
         exts = (
             "*.png *.jpg *.jpeg *.bmp *.webp"
             if type_str == "Bilder"
@@ -724,32 +884,52 @@ class MainWindow(QMainWindow):
 
         group = (
             self.combo_group.currentText()
-            if self.combo_group.currentText() != "Alle Gruppen"
+            if self.combo_group.currentText() != ALL_GROUPS
             else ""
         )
-        existing = (
-            {entry.image_path for entry in self.db.get_by_type("Bilder")}
-            if type_str == "Bilder"
-            else {entry.video_link for entry in self.db.get_by_type("Videos")}
-        )
+        existing = {
+            _norm_path(entry.media_path)
+            for entry in self.db.get_by_type(type_str)
+            if entry.media_path
+        }
         existing_titles = {entry.title for entry in self.db.get_by_type(type_str)}
+        seen_keys: set[tuple[str, str, str, str]] = set()
 
-        count = 0
+        new_entries = []
+        skipped = 0
         for path in paths:
-            if path in existing:
+            if _norm_path(path) in existing:
                 continue
             title = os.path.splitext(os.path.basename(path))[0]
             if title in existing_titles:
                 continue
-            img, vid = (path, "") if type_str == "Bilder" else ("", path)
-            self.db.add(MediaItem(title, img, 50, "", type_str, vid, group=group))
-            count += 1
-        if count > 0:
-            self.db.save()
+            entry = self._make_entry(path, type_str, group)
+            if entry is None:
+                skipped += 1
+                continue
+            key = ai_duplicate_key(entry.ai_meta)
+            if self._is_duplicate(path, type_str, entry.ai_meta) or (
+                key is not None and key in seen_keys
+            ):
+                continue
+            new_entries.append(entry)
+            existing.add(_norm_path(path))
+            existing_titles.add(title)
+            if key is not None:
+                seen_keys.add(key)
+        if new_entries:
+            self.db.add_many(new_entries)
             self.refresh_data()
+        if skipped:
+            QMessageBox.information(
+                self,
+                "Import",
+                f"{len(new_entries)} importiert, {skipped} ohne "
+                "KI-Metadaten übersprungen.",
+            )
 
-    def _batch_delete(self):
-        """Löscht alle ausgewählten Einträge nach Bestätigung."""
+    def _batch_delete(self) -> None:
+        """Delete all selected entries after confirmation."""
         if (
             QMessageBox.question(
                 self, "Löschen", f"{len(self.selected_entries)} löschen?"
@@ -757,9 +937,7 @@ class MainWindow(QMainWindow):
             == QMessageBox.StandardButton.Yes
         ):
             for entry in self.selected_entries:
-                key = entry.image_path or entry.video_link
-                if key in self.thumbnail_cache:
-                    del self.thumbnail_cache[key]
+                self.thumbnail_cache.pop(entry.media_path, None)
             self.db.delete_multiple(self.selected_entries)
             self.recent_picks = [
                 entry
@@ -769,8 +947,8 @@ class MainWindow(QMainWindow):
             self._deselect_all()
             self.refresh_data()
 
-    def _batch_score(self):
-        """Setzt den Score für alle ausgewählten Einträge auf einen neuen Wert."""
+    def _batch_score(self) -> None:
+        """Set the score of all selected entries to a new value."""
         score, ok = QInputDialog.getInt(
             self, "Score", "Neuer Score (1-100):", 50, 1, 100
         )
@@ -781,8 +959,8 @@ class MainWindow(QMainWindow):
             self._deselect_all()
             self.refresh_data()
 
-    def _batch_group(self):
-        """Weist allen ausgewählten Einträgen eine neue Gruppe zu."""
+    def _batch_group(self) -> None:
+        """Assign a new group to all selected entries."""
         grp, ok = QInputDialog.getItem(
             self,
             "Gruppe",
@@ -798,23 +976,19 @@ class MainWindow(QMainWindow):
             self._deselect_all()
             self.refresh_data()
 
-    def _do_random(self, smart, global_pool):
-        """Wählt zufällig einen Eintrag (lokal oder global) und öffnet ihn."""
+    def _do_random(self, smart: bool, global_pool: bool) -> None:
+        """Pick a random entry (local or global) and open it."""
         pool = (
-            self.db.entries
-            if global_pool
-            else self.db.get_by_type(self.current_view)
+            self.db.entries if global_pool else self.db.get_by_type(self.current_view)
         )
         chosen = self.db.get_random(pool, smart, self.recent_picks)
         if chosen:
             self._open_detail(chosen)
 
-    def _open_group_random(self):
-        """Öffnet den Gruppen-Zufallsdialog und zeigt den gewählten Eintrag."""
+    def _open_group_random(self) -> None:
+        """Open the group random dialog and show the chosen entry."""
         dlg = GroupRandomDialog(self, self.db)
         if dlg.exec() and dlg.result_pool:
-            chosen = self.db.get_random(
-                dlg.result_pool, dlg.smart, self.recent_picks
-            )
+            chosen = self.db.get_random(dlg.result_pool, dlg.smart, self.recent_picks)
             if chosen:
                 self._open_detail(chosen)

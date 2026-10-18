@@ -4,13 +4,13 @@ from string import Template
 
 from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 ORGANIZATION = "MediaVault"
 APPLICATION = "MediaTracker"
 SETTINGS_KEY = "appearance/theme"
 
-PALETTES = {
+PALETTES: dict[str, dict[str, str]] = {
     "dark": {
         "bg": "#14161a",
         "surface": "#1c1f26",
@@ -275,14 +275,14 @@ QMenu::item:selected { background-color: $nav_active_bg; color: $primary; }
 )
 
 
-def build_stylesheet(name):
-    """Liefert das QSS für das gewünschte Theme (Fallback: dunkel)."""
+def build_stylesheet(name: str) -> str:
+    """Return the QSS for the requested theme, falling back to dark."""
     colors = PALETTES.get(name, PALETTES["dark"])
     return _STYLESHEET.substitute(colors)
 
 
-def build_qpalette(name):
-    """Liefert eine QPalette für native Dialoge und Popups."""
+def build_qpalette(name: str) -> QPalette:
+    """Return a QPalette for native dialogs and popups."""
     colors = PALETTES.get(name, PALETTES["dark"])
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(colors["bg"]))
@@ -311,8 +311,8 @@ def build_qpalette(name):
     return palette
 
 
-def repolish(widget):
-    """Erzwingt eine Neubewertung dynamischer Properties (z. B. selected)."""
+def repolish(widget: QWidget) -> None:
+    """Force a restyle after a dynamic property (e.g. ``selected``) changed."""
     style = widget.style()
     style.unpolish(widget)
     style.polish(widget)
@@ -320,27 +320,30 @@ def repolish(widget):
 
 
 class ThemeManager(QObject):
-    """Verwaltet das aktive Theme und speichert die Auswahl dauerhaft."""
+    """Manage the active theme and persist the user's choice."""
 
     theme_changed = pyqtSignal(str)
 
-    def __init__(self, settings=None, parent=None):
+    def __init__(
+        self, settings: QSettings | None = None, parent: QObject | None = None
+    ) -> None:
+        """Load the stored theme, defaulting to dark."""
         super().__init__(parent)
         self._settings = settings or QSettings(ORGANIZATION, APPLICATION)
         stored = str(self._settings.value(SETTINGS_KEY, "dark"))
         self._name = stored if stored in PALETTES else "dark"
 
     @property
-    def name(self):
-        """Name des aktiven Themes ("dark" oder "light")."""
+    def name(self) -> str:
+        """Name of the active theme ("dark" or "light")."""
         return self._name
 
-    def palette(self):
-        """Farbpalette des aktiven Themes."""
+    def palette(self) -> dict[str, str]:
+        """Color palette of the active theme."""
         return PALETTES[self._name]
 
-    def apply(self, app, name=None):
-        """Wendet ein Theme auf die Anwendung an und speichert die Auswahl."""
+    def apply(self, app: QApplication, name: str | None = None) -> str:
+        """Apply a theme to the application and persist the choice."""
         if name in PALETTES:
             self._name = name
         app.setPalette(build_qpalette(self._name))
@@ -351,13 +354,6 @@ class ThemeManager(QObject):
         self.theme_changed.emit(self._name)
         return self._name
 
-    def toggle(self, app):
-        """Wechselt zwischen Dark und Light und liefert den neuen Namen."""
+    def toggle(self, app: QApplication) -> str:
+        """Switch between dark and light and return the new theme name."""
         return self.apply(app, "light" if self._name == "dark" else "dark")
-
-
-def apply_theme(app: QApplication, name=None):
-    """Bequemer Einstiegspunkt für den Programmstart."""
-    manager = ThemeManager()
-    manager.apply(app, name)
-    return manager

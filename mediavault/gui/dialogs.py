@@ -1,15 +1,23 @@
-"""Dialoge für Detailansicht, Bearbeiten und Gruppen-Zufall."""
+"""Dialogs for the detail view, editing, configs and prompt analysis."""
 
+import os
 import time
+from collections.abc import Callable
+from html import escape
+from typing import Any
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -18,23 +26,37 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mediavault.ai_meta import format_ai_meta, summarize_prompts
+from mediavault.config import (
+    MODE_AI,
+    MODE_NORMAL,
+    VaultConfig,
+    create_config,
+    save_configs,
+)
 from mediavault.gui.widgets import rounded_pixmap
-from mediavault.models import MediaItem
+from mediavault.models import MediaDatabase, MediaItem
 from mediavault.utils import OSHelper
 
 
-def _field_label(text):
-    """Erzeugt ein gedämpftes Formularlabel."""
+def _field_label(text: str) -> QLabel:
+    """Create a muted form label."""
     label = QLabel(text)
     label.setObjectName("FieldLabel")
     return label
 
 
 class DetailDialog(QDialog):
-    """Dialog mit Vorschau, Statistiken und Bewertungsbuttons für einen Eintrag."""
+    """Dialog with preview, statistics and rating buttons for one entry."""
 
-    def __init__(self, parent, entry, db, get_pixmap_func):
-        """Initialisiert den Detaildialog für den übergebenen Eintrag."""
+    def __init__(
+        self,
+        parent: QWidget | None,
+        entry: MediaItem,
+        db: MediaDatabase,
+        get_pixmap_func: Callable[[MediaItem], QPixmap | None],
+    ) -> None:
+        """Initialize the detail dialog for ``entry``."""
         super().__init__(parent)
         self.entry = entry
         self.db = db
@@ -45,8 +67,8 @@ class DetailDialog(QDialog):
         self.edit_requested = False
         self._build_ui()
 
-    def _build_ui(self):
-        """Erstellt das Layout mit Bild, Infos, Rating und Aktionsbuttons."""
+    def _build_ui(self) -> None:
+        """Build the layout with image, info, rating and action buttons."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
@@ -74,9 +96,9 @@ class DetailDialog(QDialog):
         grp_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(grp_lbl)
 
-        has_media = (
-            self.entry.entry_type == "Videos" and self.entry.video_link
-        ) or (self.entry.entry_type == "Bilder" and self.entry.image_path)
+        has_media = (self.entry.entry_type == "Videos" and self.entry.video_link) or (
+            self.entry.entry_type == "Bilder" and self.entry.image_path
+        )
         if has_media:
             btn_play = QPushButton("▶  Abspielen / Öffnen")
             btn_play.setProperty("variant", "primary")
@@ -91,6 +113,27 @@ class DetailDialog(QDialog):
             desc.setMaximumHeight(110)
             layout.addWidget(desc)
 
+        if self.entry.ai_meta:
+            summary = format_ai_meta(self.entry.ai_meta)
+            if summary:
+                meta_lbl = QLabel(summary)
+                meta_lbl.setObjectName("MutedLabel")
+                meta_lbl.setWordWrap(True)
+                layout.addWidget(meta_lbl)
+            for label, key in (
+                ("Prompt", "prompt"),
+                ("Negative Prompt", "negative_prompt"),
+            ):
+                value = self.entry.ai_meta.get(key, "")
+                if not value:
+                    continue
+                layout.addWidget(_field_label(label))
+                box = QTextEdit()
+                box.setReadOnly(True)
+                box.setPlainText(value)
+                box.setMaximumHeight(100)
+                layout.addWidget(box)
+
         self.lbl_stats = QLabel(self._get_stats_text())
         self.lbl_stats.setObjectName("MutedLabel")
         self.lbl_stats.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -101,9 +144,7 @@ class DetailDialog(QDialog):
         for rating in range(1, 6):
             btn = QPushButton(str(rating))
             btn.setProperty("variant", "secondary")
-            btn.setToolTip(
-                f"Bewertung {rating}: Score {self._rating_delta(rating):+d}"
-            )
+            btn.setToolTip(f"Bewertung {rating}: Score {self._rating_delta(rating):+d}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(
                 lambda checked=False, value=rating: self._apply_rating(value)
@@ -127,20 +168,25 @@ class DetailDialog(QDialog):
         layout.addLayout(buttons)
 
     @staticmethod
-    def _rating_delta(rating):
-        """Liefert die Score-Änderung einer Bewertung."""
+    def _rating_delta(rating: int) -> int:
+        """Return the score change for a rating."""
         return {1: -10, 2: -5, 3: 0, 4: 5, 5: 10}[rating]
 
-    def _get_stats_text(self):
-        """Formatiert Score und Zähler als Statistik-Text."""
+    def _get_stats_text(self) -> str:
+        """Format score and counters as statistics text."""
         return (
             f"<b>Score {self.entry.score}/100</b> · "
             f"{self.entry.watched_counter}× angesehen · "
             f"{self.entry.rating_count} Bewertungen"
         )
 
-    def _play_media(self):
-        """Öffnet die Mediendatei und aktualisiert Zähler sowie Zeitstempel."""
+    def _persist_stats(self) -> None:
+        """Persist the updated statistics and refresh their display."""
+        self.db.save()
+        self.lbl_stats.setText(self._get_stats_text())
+
+    def _play_media(self) -> None:
+        """Open the media file and update counters and timestamp."""
         path = (
             self.entry.video_link
             if self.entry.entry_type == "Videos"
@@ -149,34 +195,40 @@ class DetailDialog(QDialog):
         OSHelper.open_file(path)
         self.entry.watched_counter += 1
         self.entry.last_watched = time.time()
-        self.db.save()
-        self.lbl_stats.setText(self._get_stats_text())
+        self._persist_stats()
 
-    def _apply_rating(self, rating):
-        """Passt den Score anhand der Bewertung (1-5) an und speichert."""
+    def _apply_rating(self, rating: int) -> None:
+        """Adjust the score based on the rating (1-5) and persist it."""
         self.entry.score = max(
             1, min(100, self.entry.score + self._rating_delta(rating))
         )
         self.entry.watched_counter += 1
         self.entry.rating_count += 1
         self.entry.last_watched = time.time()
-        self.db.save()
-        self.lbl_stats.setText(self._get_stats_text())
+        self._persist_stats()
 
-    def _trigger_edit(self):
-        """Markiert den Wunsch zu bearbeiten und schließt den Dialog."""
+    def _trigger_edit(self) -> None:
+        """Flag an edit request and close the dialog."""
         self.edit_requested = True
         self.accept()
 
 
 class EditDialog(QDialog):
-    """Dialog zum Erstellen oder Bearbeiten eines Medien-Eintrags."""
+    """Dialog for creating or editing a media entry."""
 
-    def __init__(self, parent, db, entry_type, entry=None):
-        """Initialisiert den Bearbeiten-Dialog für einen neuen oder bestehenden Eintrag."""
+    def __init__(
+        self,
+        parent: QWidget | None,
+        db: MediaDatabase,
+        entry_type: str,
+        entry: MediaItem | None = None,
+        ai_meta: dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize the edit dialog for a new or existing entry."""
         super().__init__(parent)
         self.db = db
         self.entry = entry
+        self.ai_meta = ai_meta or {}
         self.entry_type = entry.entry_type if entry else entry_type
         self.setWindowTitle("Bearbeiten" if entry else "Erstellen")
         self.setMinimumSize(460, 640)
@@ -184,8 +236,8 @@ class EditDialog(QDialog):
         self._build_ui()
         self._populate()
 
-    def _build_ui(self):
-        """Erstellt die Eingabefelder für Titel, Gruppe, Beschreibung, Score und Pfade."""
+    def _build_ui(self) -> None:
+        """Build the inputs for title, group, description, score and paths."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
@@ -247,8 +299,8 @@ class EditDialog(QDialog):
         buttons.addWidget(btn_save)
         layout.addLayout(buttons)
 
-    def _populate(self):
-        """Füllt die Eingabefelder mit den Werten eines bestehenden Eintrags."""
+    def _populate(self) -> None:
+        """Fill the inputs with the values of an existing entry."""
         if self.entry:
             self.inp_title.setText(self.entry.title)
             self.inp_group.setCurrentText(self.entry.group)
@@ -258,8 +310,8 @@ class EditDialog(QDialog):
             if self.entry_type == "Videos":
                 self.inp_video.setText(self.entry.video_link)
 
-    def _choose_vid(self):
-        """Öffnet einen Dateidialog zur Auswahl einer Videodatei."""
+    def _choose_vid(self) -> None:
+        """Open a file dialog to choose a video file."""
         path, _ = OSHelper.pick_file(
             self,
             "Video wählen",
@@ -268,8 +320,8 @@ class EditDialog(QDialog):
         if path:
             self.inp_video.setText(path)
 
-    def _choose_img(self):
-        """Öffnet einen Dateidialog zur Auswahl einer Bilddatei."""
+    def _choose_img(self) -> None:
+        """Open a file dialog to choose an image file."""
         path, _ = OSHelper.pick_file(
             self,
             "Bild wählen",
@@ -278,8 +330,8 @@ class EditDialog(QDialog):
         if path:
             self.inp_img.setText(path)
 
-    def _save(self):
-        """Validiert die Eingaben und speichert den Eintrag in der Datenbank."""
+    def _save(self) -> None:
+        """Validate the inputs and save the entry to the database."""
         if not self.inp_title.text().strip():
             QMessageBox.warning(self, "Fehler", "Titel ist erforderlich.")
             return
@@ -304,7 +356,14 @@ class EditDialog(QDialog):
             self.entry.score = score
         else:
             self.entry = MediaItem(
-                title, img, score, desc, self.entry_type, vid, group=group
+                title,
+                img,
+                score,
+                desc,
+                self.entry_type,
+                vid,
+                group=group,
+                ai_meta=dict(self.ai_meta),
             )
             self.db.add(self.entry)
 
@@ -312,21 +371,21 @@ class EditDialog(QDialog):
 
 
 class GroupRandomDialog(QDialog):
-    """Dialog zur Auswahl von Gruppen und Medientypen für einen Zufallspick."""
+    """Dialog to choose groups and media types for a random pick."""
 
-    def __init__(self, parent, db):
-        """Initialisiert den Gruppen-Zufallsdialog mit der Datenbank."""
+    def __init__(self, parent: QWidget | None, db: MediaDatabase) -> None:
+        """Initialize the group random dialog with the database."""
         super().__init__(parent)
         self.db = db
-        self.result_pool = []
+        self.result_pool: list[MediaItem] = []
         self.smart = False
         self.setWindowTitle("Gruppen-Zufall")
         self.setMinimumSize(380, 480)
         self.resize(400, 520)
         self._build_ui()
 
-    def _build_ui(self):
-        """Erstellt die Gruppen-Checkboxen, Typauswahl und Aktionsbuttons."""
+    def _build_ui(self) -> None:
+        """Build group checkboxes, type selection and action buttons."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
@@ -340,7 +399,7 @@ class GroupRandomDialog(QDialog):
         self.vbox.setContentsMargins(4, 4, 4, 4)
         self.vbox.setSpacing(6)
 
-        self.group_boxes = {}
+        self.group_boxes: dict[str, QCheckBox] = {}
         for group in self.db.get_all_groups():
             box = QCheckBox(group)
             box.setChecked(True)
@@ -380,12 +439,10 @@ class GroupRandomDialog(QDialog):
         button_row.addWidget(btn_smart)
         layout.addLayout(button_row)
 
-    def _execute(self, smart):
-        """Baut den Auswahl-Pool aus Gruppen/Typen und schließt den Dialog."""
+    def _execute(self, smart: bool) -> None:
+        """Build the selection pool from groups/types and close the dialog."""
         selected_groups = [
-            group
-            for group, box in self.group_boxes.items()
-            if box.isChecked()
+            group for group, box in self.group_boxes.items() if box.isChecked()
         ]
         selected_types = []
         if self.cb_img.isChecked():
@@ -408,3 +465,191 @@ class GroupRandomDialog(QDialog):
         ]
         self.smart = smart
         self.accept()
+
+
+class ConfigDialog(QDialog):
+    """Dialog to open an existing vault config or create a new one."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        configs: list[VaultConfig],
+        current_db_path: str,
+    ) -> None:
+        """Initialize the dialog with the known configs."""
+        super().__init__(parent)
+        self.configs = list(configs)
+        self.selected_config: VaultConfig | None = None
+        self.setWindowTitle("Config wechseln")
+        self.setMinimumSize(520, 560)
+        self._build_ui(current_db_path)
+
+    def _build_ui(self, current_db_path: str) -> None:
+        """Build the config list, the create form and the action buttons."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(10)
+
+        layout.addWidget(_field_label("Bestehende Configs"))
+        self.list_configs = QListWidget()
+        for config in self.configs:
+            mode = "KI-Bilder" if config.mode == MODE_AI else "Normal"
+            folder = config.folder or "kein Ordner"
+            item = QListWidgetItem(f"{config.name} · {mode} · {folder}")
+            item.setData(Qt.ItemDataRole.UserRole, config.db_path)
+            self.list_configs.addItem(item)
+            if config.db_path == current_db_path:
+                self.list_configs.setCurrentItem(item)
+        self.list_configs.itemDoubleClicked.connect(lambda _item: self._open_selected())
+        layout.addWidget(self.list_configs, 1)
+
+        btn_open = QPushButton("Ausgewählte Config öffnen")
+        btn_open.setProperty("variant", "secondary")
+        btn_open.clicked.connect(self._open_selected)
+        layout.addWidget(btn_open)
+
+        layout.addWidget(_field_label("Neu erstellen"))
+        self.inp_name = QLineEdit()
+        self.inp_name.setPlaceholderText("Name")
+        layout.addWidget(self.inp_name)
+
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem("Normale Medien", MODE_NORMAL)
+        self.combo_mode.addItem("KI-Bilder", MODE_AI)
+        layout.addWidget(self.combo_mode)
+
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        self.inp_folder = QLineEdit()
+        self.inp_folder.setPlaceholderText("Ordner (optional) – beim Start scannen")
+        folder_row.addWidget(self.inp_folder)
+        btn_folder = QPushButton("Ordner wählen…")
+        btn_folder.setProperty("variant", "secondary")
+        btn_folder.clicked.connect(self._choose_folder)
+        folder_row.addWidget(btn_folder)
+        layout.addLayout(folder_row)
+
+        hint = QLabel(
+            "Ohne Ordner startet die Config leer; Bilder danach einzeln importieren."
+        )
+        hint.setObjectName("MutedLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        btn_create = QPushButton("Erstellen & öffnen")
+        btn_create.setProperty("variant", "primary")
+        btn_create.clicked.connect(self._create)
+        buttons.addStretch()
+        buttons.addWidget(btn_cancel)
+        buttons.addWidget(btn_create)
+        layout.addLayout(buttons)
+
+    def _choose_folder(self) -> None:
+        """Pick a scan folder for a new config."""
+        folder = QFileDialog.getExistingDirectory(self, "Ordner wählen")
+        if folder:
+            self.inp_folder.setText(folder)
+
+    def _open_selected(self) -> None:
+        """Select the highlighted config and remember it as the last one."""
+        item = self.list_configs.currentItem()
+        if item is None:
+            QMessageBox.warning(self, "Hinweis", "Bitte eine Config auswählen.")
+            return
+        db_path = item.data(Qt.ItemDataRole.UserRole)
+        self.selected_config = next(
+            config for config in self.configs if config.db_path == db_path
+        )
+        save_configs(self.configs, db_path)
+        self.accept()
+
+    def _create(self) -> None:
+        """Validate the form, create the config and make it the selected one."""
+        name = self.inp_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Fehler", "Name ist erforderlich.")
+            return
+        if any(config.name.casefold() == name.casefold() for config in self.configs):
+            QMessageBox.warning(
+                self, "Fehler", "Eine Config mit diesem Namen existiert bereits."
+            )
+            return
+        folder = self.inp_folder.text().strip()
+        if folder and not os.path.isdir(folder):
+            QMessageBox.warning(self, "Fehler", "Der Ordner existiert nicht.")
+            return
+
+        config = create_config(
+            name, self.combo_mode.currentData(), folder, self.configs
+        )
+        self.configs.append(config)
+        save_configs(self.configs, config.db_path)
+        self.selected_config = config
+        self.accept()
+
+
+class AnalysisDialog(QDialog):
+    """Read-only local prompt statistics for the current AI config."""
+
+    def __init__(self, parent: QWidget | None, db: MediaDatabase) -> None:
+        """Initialize the dialog from the database entries."""
+        super().__init__(parent)
+        self.setWindowTitle("Prompt-Analyse")
+        self.setMinimumSize(560, 600)
+        self.resize(620, 700)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(self._build_html(summarize_prompts(db.entries)))
+        layout.addWidget(text)
+
+        btn_close = QPushButton("Schließen")
+        btn_close.setProperty("variant", "secondary")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignRight)
+
+    @staticmethod
+    def _build_html(summary: dict[str, Any]) -> str:
+        """Format the summary dictionary as simple rich text."""
+        if not summary["count"]:
+            return "<h2>Prompt-Analyse</h2><p>Keine KI-Bilder mit Prompt gefunden.</p>"
+
+        def listing(rows: list[Any], formatter: Callable[[Any], str]) -> str:
+            return "<br>".join(formatter(row) for row in rows) or "–"
+
+        tags = listing(summary["top_tags"], lambda row: f"{escape(row[0])} ({row[1]}×)")
+        models = listing(summary["models"], lambda row: f"{escape(row[0])} ({row[1]}×)")
+        samplers = listing(
+            summary["samplers"], lambda row: f"{escape(row[0])} ({row[1]}×)"
+        )
+        scored = listing(
+            summary["top_tags_by_score"],
+            lambda row: f"{escape(row[0])} · Ø {row[2]:.0f} ({row[1]}×)",
+        )
+        prompts = listing(
+            summary["top_prompts"],
+            lambda row: (
+                f"<b>{escape(row['title'])}</b> ({row['score']}) – "
+                f"{escape(row['prompt'])}"
+            ),
+        )
+        return (
+            "<h2>Prompt-Analyse</h2>"
+            f"<p><b>{summary['count']}</b> Bilder mit Prompt · "
+            f"Ø Score <b>{summary['average_score']:.0f}/100</b> · "
+            f"Ø Prompt-Länge {summary['average_prompt_length']:.0f} Zeichen</p>"
+            f"<h3>Top-Tags</h3><p>{tags}</p>"
+            f"<h3>Modelle</h3><p>{models}</p>"
+            f"<h3>Sampler</h3><p>{samplers}</p>"
+            f"<h3>Tags nach Score (min. 3×)</h3><p>{scored}</p>"
+            f"<h3>Bestbewertete Prompts</h3><p>{prompts}</p>"
+        )

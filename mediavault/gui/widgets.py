@@ -1,10 +1,11 @@
-"""Kachel-Widget für die Medienübersicht."""
+"""Card widget for the media grid."""
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QPainter, QPainterPath, QPixmap
+from PyQt6.QtGui import QMouseEvent, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from mediavault.gui.theme import repolish
+from mediavault.models import MediaItem
 
 CARD_WIDTH = 200
 CARD_HEIGHT = 270
@@ -12,8 +13,8 @@ IMAGE_SIZE = 176
 IMAGE_RADIUS = 10
 
 
-def score_tier(score):
-    """Kategorisiert einen Score für das farbige Badge."""
+def score_tier(score: int) -> str:
+    """Map a score to the badge tier used for its color."""
     if score >= 75:
         return "high"
     if score >= 50:
@@ -23,8 +24,10 @@ def score_tier(score):
     return "bad"
 
 
-def rounded_pixmap(pixmap, size=IMAGE_SIZE, radius=IMAGE_RADIUS):
-    """Skaliert ein Pixmap und rundet die Ecken für die Kartenoptik."""
+def rounded_pixmap(
+    pixmap: QPixmap, size: int = IMAGE_SIZE, radius: int = IMAGE_RADIUS
+) -> QPixmap:
+    """Scale a pixmap and round its corners for the card look."""
     scaled = pixmap.scaled(
         size,
         size,
@@ -47,7 +50,7 @@ def rounded_pixmap(pixmap, size=IMAGE_SIZE, radius=IMAGE_RADIUS):
 
 
 class MediaCard(QFrame):
-    """Kachel mit Vorschau, Titel, Score und Auswahlzustand."""
+    """Grid card with preview, title, score and selection state."""
 
     clicked = pyqtSignal(object, object)
     double_clicked = pyqtSignal(object)
@@ -55,8 +58,8 @@ class MediaCard(QFrame):
     drag_moved = pyqtSignal(object)
     drag_finished = pyqtSignal()
 
-    def __init__(self, entry, pixmap):
-        """Erstellt die Kachel für einen Eintrag mit optionalem Vorschaubild."""
+    def __init__(self, entry: MediaItem, pixmap: QPixmap | None) -> None:
+        """Create the card for an entry with an optional preview image."""
         super().__init__()
         self.entry = entry
         self._selected = False
@@ -90,7 +93,9 @@ class MediaCard(QFrame):
         self.title_lbl = QLabel()
         self.title_lbl.setObjectName("CardTitle")
         self.title_lbl.setFixedSize(IMAGE_SIZE, 20)
-        self.title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.title_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         self.title_lbl.setText(
             self.title_lbl.fontMetrics().elidedText(
                 entry.title, Qt.TextElideMode.ElideRight, IMAGE_SIZE
@@ -105,7 +110,9 @@ class MediaCard(QFrame):
         self.score_lbl = QLabel(f"Score {entry.score}")
         self.score_lbl.setObjectName("ScoreBadge")
         self.score_lbl.setProperty("tier", score_tier(entry.score))
-        self.score_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.score_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         bottom.addWidget(self.score_lbl)
 
         bottom.addStretch()
@@ -113,7 +120,9 @@ class MediaCard(QFrame):
         group_text = entry.group or "Ohne Gruppe"
         self.group_lbl = QLabel()
         self.group_lbl.setObjectName("CardGroup")
-        self.group_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.group_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         self.group_lbl.setText(
             self.group_lbl.fontMetrics().elidedText(
                 group_text, Qt.TextElideMode.ElideRight, 82
@@ -136,8 +145,8 @@ class MediaCard(QFrame):
         self.selection_badge.hide()
         self.selection_badge.raise_()
 
-    def set_selected(self, selected):
-        """Hebt die Kachel bei aktiver Auswahl optisch hervor."""
+    def set_selected(self, selected: bool) -> None:
+        """Highlight the card when it is part of the selection."""
         selected = bool(selected)
         if self._selected == selected:
             return
@@ -146,8 +155,8 @@ class MediaCard(QFrame):
         self.selection_badge.setVisible(selected)
         repolish(self)
 
-    def mousePressEvent(self, event):
-        """Merkt den Druckpunkt und meldet ihn vor jeder Auswahländerung."""
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Remember the press position and report it before selection changes."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
             self._press_global = event.globalPosition().toPoint()
@@ -158,8 +167,8 @@ class MediaCard(QFrame):
             return
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        """Startet nach Überschreiten der Schwelle eine Rechteckauswahl."""
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Start rubber-band selection once the drag threshold is exceeded."""
         if self._press_global is not None and (
             event.buttons() & Qt.MouseButton.LeftButton
         ):
@@ -173,8 +182,8 @@ class MediaCard(QFrame):
                 return
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event):
-        """Sendet einen Klick oder beendet die Rechteckauswahl."""
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Emit a click or finish the rubber-band selection."""
         if event.button() == Qt.MouseButton.LeftButton:
             if self._suppress_release:
                 self._suppress_release = False
@@ -193,8 +202,8 @@ class MediaCard(QFrame):
             return
         super().mouseReleaseEvent(event)
 
-    def mouseDoubleClickEvent(self, event):
-        """Öffnet die Detailansicht und unterdrückt den folgenden Release."""
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """Open the detail view and suppress the following release event."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._suppress_release = True
             self._dragging = False
@@ -204,7 +213,7 @@ class MediaCard(QFrame):
             return
         super().mouseDoubleClickEvent(event)
 
-    def _reset_press(self):
-        """Setzt den internen Mauszustand zurück."""
+    def _reset_press(self) -> None:
+        """Reset the internal mouse state."""
         self._press_global = None
         self._dragging = False
