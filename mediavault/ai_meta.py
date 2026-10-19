@@ -36,6 +36,12 @@ def _read_text_chunks(path: str) -> dict[str, str]:
             if len(header) < 8:
                 break
             length, kind = struct.unpack(">I4s", header)
+            if kind not in (b"tEXt", b"iTXt"):
+                if kind == b"IEND":
+                    break
+                # IDAT holds the image; skip it instead of reading the whole file.
+                f.seek(length + 4, os.SEEK_CUR)
+                continue
             data = f.read(length)
             f.read(4)  # shortcut: CRC skip, add check only if corrupt files matter
             if kind == b"tEXt":
@@ -55,8 +61,6 @@ def _read_text_chunks(path: str) -> dict[str, str]:
                     except zlib.error:
                         continue
                 chunks.setdefault(_decode_text(key), _decode_text(text))
-            elif kind == b"IEND":
-                break
     return chunks
 
 
@@ -248,7 +252,8 @@ def ai_duplicate_key(meta: dict[str, Any]) -> tuple[str, str, str, str] | None:
     same generation and must not both enter the database.
     """
     prompt = str(meta.get("prompt") or "").strip()
-    seed = str(meta.get("seed") or "").strip()
+    seed_value = meta.get("seed")
+    seed = "" if seed_value is None else str(seed_value).strip()
     if not prompt or not seed:
         return None
     return (
@@ -268,7 +273,7 @@ def format_ai_meta(meta: dict[str, Any]) -> str:
         parts.append(f"{meta['steps']} Schritte")
     if meta.get("cfg_scale"):
         parts.append(f"CFG {meta['cfg_scale']:g}")
-    if meta.get("seed"):
+    if meta.get("seed") not in (None, ""):
         parts.append(f"Seed {meta['seed']}")
     if meta.get("width") and meta.get("height"):
         parts.append(f"{meta['width']}×{meta['height']}")

@@ -158,18 +158,21 @@ def test_format_ai_meta_skips_empty_values():
     meta = {
         "generator": "A1111",
         "model": "dreamshaper_8",
-        "sampler": "Euler a",
+        "sampler": "",
         "steps": 20,
         "cfg_scale": 7.0,
-        "seed": 0,
         "width": 512,
         "height": 768,
     }
 
     text = format_ai_meta(meta)
 
-    assert text == "A1111 · dreamshaper_8 · Euler a · 20 Schritte · CFG 7 · 512×768"
+    assert text == "A1111 · dreamshaper_8 · 20 Schritte · CFG 7 · 512×768"
     assert format_ai_meta({}) == ""
+
+
+def test_format_ai_meta_shows_seed_zero():
+    assert "Seed 0" in format_ai_meta({"seed": 0})
 
 
 def _ai_entry(title, prompt, score, model="m", sampler="euler"):
@@ -238,3 +241,10 @@ def test_ai_duplicate_key_requires_prompt_and_seed():
     assert ai_duplicate_key({"prompt": "castle"}) is None
     assert ai_duplicate_key({"seed": 42}) is None
     assert ai_duplicate_key({}) is None
+
+
+def test_ai_duplicate_key_keeps_seed_zero():
+    key = ai_duplicate_key({"prompt": "castle", "seed": 0})
+
+    assert key is not None
+    assert key != ai_duplicate_key({"prompt": "castle", "seed": 1})

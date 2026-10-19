@@ -58,7 +58,14 @@ def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
         config = _default_config()
         return [config], config.db_path
 
-    configs = [VaultConfig.from_dict(item) for item in data.get("configs", [])]
+    items = data.get("configs", []) if isinstance(data, dict) else []
+    if not isinstance(items, list) or not all(
+        isinstance(item, dict) for item in items
+    ):
+        logger.warning("Configs haben ein unerwartetes Format: %s", path)
+        config = _default_config()
+        return [config], config.db_path
+    configs = [VaultConfig.from_dict(item) for item in items]
     if not configs:
         config = _default_config()
         return [config], config.db_path

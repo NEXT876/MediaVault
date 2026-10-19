@@ -52,10 +52,16 @@ def main() -> None:
 
     window = MainWindow(theme)
 
+    def _scan_after_show() -> None:
+        window.scan_folder()
+        window.refresh_data()
+
     # Keep the splash visible for at least 1.2 s so it does not just flash.
     def _show_main() -> None:
         window.show()
         splash.finish(window)
+        # Scan after the first paint so the splash is not frozen mid-redraw.
+        QTimer.singleShot(0, _scan_after_show)
 
     QTimer.singleShot(1200, _show_main)
     sys.exit(app.exec())

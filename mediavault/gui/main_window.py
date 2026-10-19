@@ -138,7 +138,6 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._sync_theme_button()
         self._apply_config_ui()
-        self._scan_folder()
         self.refresh_data()
 
     # --- UI construction ---
@@ -382,26 +381,29 @@ class MainWindow(QMainWindow):
         suffix = " · KI" if ai else ""
         self.setWindowTitle(f"MediaVault – {self.config.name}{suffix}")
 
-    def _scan_folder(self) -> None:
+    def scan_folder(self) -> None:
         """Import images from the config's folder, using the DB as the cache."""
         if not self.config.folder:
             return
         ai = self.config.mode == MODE_AI
-        known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
+        stored = self.db.get_by_type("Bilder")
+        known = [entry.image_path for entry in stored]
+        known_keys = {
+            key for entry in stored if (key := ai_duplicate_key(entry.ai_meta))
+        }
         paths = find_new_images(
             self.config.folder, known, {".png"} if ai else IMAGE_EXTS
         )
         entries: list[MediaItem] = []
-        seen_keys: set[tuple[str, str, str, str]] = set()
         for path in paths:
             entry = self._make_entry(path, "Bilder", "")
-            if entry is None or self._is_duplicate(path, "Bilder", entry.ai_meta):
+            if entry is None:
                 continue
             key = ai_duplicate_key(entry.ai_meta)
             if key is not None:
-                if key in seen_keys:
+                if key in known_keys:
                     continue
-                seen_keys.add(key)
+                known_keys.add(key)
             entries.append(entry)
         if entries:
             self.db.add_many(entries)
@@ -452,6 +454,14 @@ class MainWindow(QMainWindow):
                     os_thumb = OSHelper.get_os_thumbnail(entry.video_link)
                     if os_thumb:
                         pixmap = QPixmap(os_thumb)
+            if pixmap:
+                # Cards are ~176 px wide; keep the cache small.
+                pixmap = pixmap.scaled(
+                    512,
+                    512,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
             self.thumbnail_cache[key] = pixmap
         return self.thumbnail_cache[key]
 
@@ -780,7 +790,7 @@ class MainWindow(QMainWindow):
         self._apply_selection(set())
         self._anchor_entry = None
         self._apply_config_ui()
-        self._scan_folder()
+        self.scan_folder()
         self.refresh_data()
 
     def _open_analysis(self) -> None:
@@ -866,7 +876,6 @@ class MainWindow(QMainWindow):
             dlg.inp_video.setText(path)
 
         if dlg.exec():
-            self.db.save()
             self.refresh_data()
 
     def _batch_import(self, type_str: str) -> None:
@@ -887,13 +896,14 @@ class MainWindow(QMainWindow):
             if self.combo_group.currentText() != ALL_GROUPS
             else ""
         )
+        stored = self.db.get_by_type(type_str)
         existing = {
-            _norm_path(entry.media_path)
-            for entry in self.db.get_by_type(type_str)
-            if entry.media_path
+            _norm_path(entry.media_path) for entry in stored if entry.media_path
         }
-        existing_titles = {entry.title for entry in self.db.get_by_type(type_str)}
-        seen_keys: set[tuple[str, str, str, str]] = set()
+        existing_titles = {entry.title for entry in stored}
+        existing_keys = {
+            key for entry in stored if (key := ai_duplicate_key(entry.ai_meta))
+        }
 
         new_entries = []
         skipped = 0
@@ -908,15 +918,13 @@ class MainWindow(QMainWindow):
                 skipped += 1
                 continue
             key = ai_duplicate_key(entry.ai_meta)
-            if self._is_duplicate(path, type_str, entry.ai_meta) or (
-                key is not None and key in seen_keys
-            ):
-                continue
+            if key is not None:
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
             new_entries.append(entry)
             existing.add(_norm_path(path))
             existing_titles.add(title)
-            if key is not None:
-                seen_keys.add(key)
         if new_entries:
             self.db.add_many(new_entries)
             self.refresh_data()

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from mediavault.config import (
     DEFAULT_DB_PATH,
     MODE_AI,
@@ -38,6 +40,19 @@ def test_corrupt_file_is_not_overwritten(tmp_path):
     assert len(configs) == 1
     assert last == DEFAULT_DB_PATH
     assert path.read_text(encoding="utf-8") == "{not json"
+
+
+@pytest.mark.parametrize("content", ["[]", "null", '{"configs": "nope"}'])
+def test_wrong_shape_falls_back_to_default(tmp_path, content):
+    path = tmp_path / "configs.json"
+    path.write_text(content, encoding="utf-8")
+
+    configs, last = load_configs(str(path))
+
+    assert [(config.name, config.mode, config.db_path) for config in configs] == [
+        ("Meine Mediathek", MODE_NORMAL, DEFAULT_DB_PATH)
+    ]
+    assert last == DEFAULT_DB_PATH
 
 
 def test_save_and_load_last_config(tmp_path):
