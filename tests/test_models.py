@@ -81,9 +81,10 @@ def test_add_saves(tmp_path, monkeypatch):
     assert [entry.title for entry in db.entries] == ["A"]
 
 
-def test_corrupt_json_is_backed_up(tmp_path):
+@pytest.mark.parametrize("content", ["{not json", "{}", '[{"title": "A"}, 5]'])
+def test_corrupt_json_is_backed_up(tmp_path, content):
     path = tmp_path / "m.json"
-    path.write_text("{not json", encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
 
     db = MediaDatabase(str(path))
     db.load()
@@ -91,7 +92,7 @@ def test_corrupt_json_is_backed_up(tmp_path):
     assert db.entries == []
     backups = list(tmp_path.glob("m.json.corrupt.*"))
     assert len(backups) == 1
-    assert backups[0].read_text(encoding="utf-8") == "{not json"
+    assert backups[0].read_text(encoding="utf-8") == content
 
 
 def test_smart_weights_follow_formula(monkeypatch):

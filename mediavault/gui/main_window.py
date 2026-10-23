@@ -169,7 +169,6 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._sync_theme_button()
         self._apply_config_ui()
-        self._scan_folder()
         self.refresh_data()
 
     # --- UI construction ---
@@ -422,7 +421,7 @@ class MainWindow(QMainWindow):
         suffix = " · KI" if ai else ""
         self.setWindowTitle(f"MediaVault – {self.config.name}{suffix}")
 
-    def _scan_folder(self) -> None:
+    def scan_folder(self) -> None:
         """Import images from the config's folder, using the DB as the cache."""
         if not self.config.folder:
             return
@@ -578,6 +577,14 @@ class MainWindow(QMainWindow):
                     os_thumb = OSHelper.get_os_thumbnail(entry.video_link)
                     if os_thumb:
                         pixmap = QPixmap(os_thumb)
+            if pixmap:
+                # Cards are ~176 px wide; keep the cache small.
+                pixmap = pixmap.scaled(
+                    512,
+                    512,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
             self.thumbnail_cache[key] = pixmap
         return self.thumbnail_cache[key]
 
@@ -906,7 +913,7 @@ class MainWindow(QMainWindow):
         self._apply_selection(set())
         self._anchor_entry = None
         self._apply_config_ui()
-        self._scan_folder()
+        self.scan_folder()
         self.refresh_data()
 
     def _open_analysis(self) -> None:
@@ -992,7 +999,6 @@ class MainWindow(QMainWindow):
             dlg.inp_video.setText(path)
 
         if dlg.exec():
-            self.db.save()
             self.refresh_data()
 
     def _batch_import(self, type_str: str) -> None:

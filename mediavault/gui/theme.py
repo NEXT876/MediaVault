@@ -10,6 +10,9 @@ ORGANIZATION = "MediaVault"
 APPLICATION = "MediaTracker"
 SETTINGS_KEY = "appearance/theme"
 
+# Segoe UI on Windows; Linux distros use the first family they have installed.
+FONT_FAMILIES = ("Segoe UI", "Noto Sans", "Ubuntu", "Cantarell", "DejaVu Sans")
+
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
         "bg": "#14161a",
@@ -71,7 +74,6 @@ QMainWindow, QDialog {
 
 QWidget {
     color: $text;
-    font-family: "Segoe UI";
     font-size: 13px;
 }
 

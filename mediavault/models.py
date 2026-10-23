@@ -69,8 +69,12 @@ class MediaDatabase:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if not isinstance(data, list) or not all(
+                    isinstance(item, dict) for item in data
+                ):
+                    raise ValueError("Unerwartetes Datenformat")
                 self.entries = [MediaItem.from_dict(item) for item in data]
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             logger.error("JSON beschädigt: %s", self.filepath)
             backup = f"{self.filepath}.corrupt.{int(time.time())}"
             try:
