@@ -1,7 +1,6 @@
 """Main window of MediaVault."""
 
 import logging
-import os
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -25,7 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mediavault.ai_meta import ai_duplicate_key, extract_ai_metadata
+from mediavault.ai_meta import extract_ai_metadata
 from mediavault.config import IMAGE_EXTS, MODE_AI, find_new_images, load_configs
 from mediavault.gui.dialogs import (
     AnalysisDialog,
@@ -36,17 +35,13 @@ from mediavault.gui.dialogs import (
 )
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
+from mediavault.importer import find_duplicate, import_paths
 from mediavault.models import MediaDatabase, MediaItem
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
 
 ALL_GROUPS = "Alle Gruppen"
-
-
-def _norm_path(path: str) -> str:
-    """Normalize a file path for duplicate checks."""
-    return os.path.normcase(os.path.abspath(path))
 
 
 def visible_entries(
@@ -391,46 +386,9 @@ class MainWindow(QMainWindow):
         paths = find_new_images(
             self.config.folder, known, {".png"} if ai else IMAGE_EXTS
         )
-        entries: list[MediaItem] = []
-        seen_keys: set[tuple[str, str, str, str]] = set()
-        for path in paths:
-            entry = self._make_entry(path, "Bilder", "")
-            if entry is None or self._is_duplicate(path, "Bilder", entry.ai_meta):
-                continue
-            key = ai_duplicate_key(entry.ai_meta)
-            if key is not None:
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-            entries.append(entry)
-        if entries:
-            self.db.add_many(entries)
-
-    def _is_duplicate(self, path: str, type_str: str, meta: dict[str, Any]) -> bool:
-        """Return True if the file or the AI generation is already stored."""
-        entries = self.db.get_by_type(type_str)
-        normalized = _norm_path(path)
-        if any(
-            entry.media_path and _norm_path(entry.media_path) == normalized
-            for entry in entries
-        ):
-            return True
-        key = ai_duplicate_key(meta)
-        return key is not None and any(
-            ai_duplicate_key(entry.ai_meta) == key for entry in entries
+        import_paths(
+            self.db, paths, type_str="Bilder", group="", mode=self.config.mode
         )
-
-    def _make_entry(self, path: str, type_str: str, group: str) -> MediaItem | None:
-        """Build an entry from a file, requiring AI metadata in AI configs."""
-        meta: dict[str, Any] = {}
-        if self.config.mode == MODE_AI:
-            meta = extract_ai_metadata(path) or {}
-            if not meta:
-                logger.info("Kein KI-Bild, übersprungen: %s", path)
-                return None
-        title = os.path.splitext(os.path.basename(path))[0]
-        img, vid = (path, "") if type_str == "Bilder" else ("", path)
-        return MediaItem(title, img, 50, "", type_str, vid, group=group, ai_meta=meta)
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
         """Return an entry's preview pixmap, cached by its media path."""
@@ -851,7 +809,7 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-        if self._is_duplicate(path, type_str, meta):
+        if find_duplicate(self.db, path, type_str, meta):
             QMessageBox.information(
                 self,
                 "Bereits vorhanden",
@@ -887,45 +845,17 @@ class MainWindow(QMainWindow):
             if self.combo_group.currentText() != ALL_GROUPS
             else ""
         )
-        existing = {
-            _norm_path(entry.media_path)
-            for entry in self.db.get_by_type(type_str)
-            if entry.media_path
-        }
-        existing_titles = {entry.title for entry in self.db.get_by_type(type_str)}
-        seen_keys: set[tuple[str, str, str, str]] = set()
-
-        new_entries = []
-        skipped = 0
-        for path in paths:
-            if _norm_path(path) in existing:
-                continue
-            title = os.path.splitext(os.path.basename(path))[0]
-            if title in existing_titles:
-                continue
-            entry = self._make_entry(path, type_str, group)
-            if entry is None:
-                skipped += 1
-                continue
-            key = ai_duplicate_key(entry.ai_meta)
-            if self._is_duplicate(path, type_str, entry.ai_meta) or (
-                key is not None and key in seen_keys
-            ):
-                continue
-            new_entries.append(entry)
-            existing.add(_norm_path(path))
-            existing_titles.add(title)
-            if key is not None:
-                seen_keys.add(key)
-        if new_entries:
-            self.db.add_many(new_entries)
+        result = import_paths(
+            self.db, paths, type_str=type_str, group=group, mode=self.config.mode
+        )
+        if result.added:
             self.refresh_data()
-        if skipped:
+        if result.duplicates or result.skipped_no_ai:
+            summary = [f"{result.added} importiert", f"{result.duplicates} Duplikate"]
+            if result.skipped_no_ai:
+                summary.append(f"{result.skipped_no_ai} ohne KI-Metadaten")
             QMessageBox.information(
-                self,
-                "Import",
-                f"{len(new_entries)} importiert, {skipped} ohne "
-                "KI-Metadaten übersprungen.",
+                self, "Import", ", ".join(summary) + " übersprungen."
             )
 
     def _batch_delete(self) -> None:

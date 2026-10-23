@@ -32,6 +32,7 @@ class MediaItem:
     rating_count: int = 0
     group: str = ""
     ai_meta: dict[str, Any] = field(default_factory=dict)
+    content_hash: str = ""
 
     @property
     def media_path(self) -> str:

@@ -35,6 +35,7 @@ from mediavault.config import (
     save_configs,
 )
 from mediavault.gui.widgets import rounded_pixmap
+from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem
 from mediavault.utils import OSHelper
 
@@ -347,6 +348,12 @@ class EditDialog(QDialog):
         img = self.inp_img.text()
         vid = self.inp_video.text() if self.entry_type == "Videos" else ""
 
+        media = img or vid
+        try:
+            file_hash = content_hash(media) if media else ""
+        except OSError:
+            file_hash = self.entry.content_hash if self.entry else ""
+
         if self.entry:
             self.entry.title = title
             self.entry.group = group
@@ -354,6 +361,7 @@ class EditDialog(QDialog):
             self.entry.image_path = img
             self.entry.video_link = vid
             self.entry.score = score
+            self.entry.content_hash = file_hash
         else:
             self.entry = MediaItem(
                 title,
@@ -364,6 +372,7 @@ class EditDialog(QDialog):
                 vid,
                 group=group,
                 ai_meta=dict(self.ai_meta),
+                content_hash=file_hash,
             )
             self.db.add(self.entry)
 
