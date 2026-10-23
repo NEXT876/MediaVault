@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,12 @@ class VaultConfig:
     mode: str = MODE_NORMAL
     db_path: str = ""
     folder: str = ""
+    rule34_api_key: str = ""
+    rule34_user_id: str = ""
+    rule34_tags: str = ""
+    rule34_count: int = 10
+    rule34_webm: bool = False
+    rule34_last_ids: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
@@ -37,7 +43,48 @@ class VaultConfig:
             mode=mode if mode in (MODE_NORMAL, MODE_AI) else MODE_NORMAL,
             db_path=str(data.get("db_path") or DEFAULT_DB_PATH),
             folder=str(data.get("folder") or ""),
+            rule34_api_key=str(data.get("rule34_api_key") or ""),
+            rule34_user_id=str(data.get("rule34_user_id") or ""),
+            rule34_tags=str(data.get("rule34_tags") or ""),
+            rule34_count=_int_setting(data.get("rule34_count"), 10, 1, 1000),
+            rule34_webm=_bool_setting(data.get("rule34_webm")),
+            rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
         )
+
+
+def _int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
+    """Return an integer setting clamped to a valid range."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(number, minimum), maximum)
+
+
+def _bool_setting(value: Any) -> bool:
+    """Return a boolean setting, accepting common JSON and string forms."""
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes"}
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, (int, float)) and value == 1
+
+
+def _last_ids(value: Any) -> dict[str, int]:
+    """Return only positive integer IDs from a stored mapping."""
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, int] = {}
+    for key, raw in value.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            number = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            result[key] = number
+    return result
 
 
 def _default_config() -> VaultConfig:

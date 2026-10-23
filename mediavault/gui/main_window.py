@@ -25,18 +25,30 @@ from PyQt6.QtWidgets import (
 )
 
 from mediavault.ai_meta import extract_ai_metadata
-from mediavault.config import IMAGE_EXTS, MODE_AI, find_new_images, load_configs
+from mediavault.config import (
+    IMAGE_EXTS,
+    MODE_AI,
+    find_new_images,
+    load_configs,
+    save_configs,
+)
 from mediavault.gui.dialogs import (
     AnalysisDialog,
     ConfigDialog,
     DetailDialog,
     EditDialog,
     GroupRandomDialog,
+    Rule34Dialog,
 )
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
 from mediavault.importer import find_duplicate, import_paths
 from mediavault.models import MediaDatabase, MediaItem
+from mediavault.rule34 import (
+    Rule34Error,
+    fetch_and_import,
+    query_signature,
+)
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
@@ -196,6 +208,13 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(
             self._create_side_btn("📂  Aus Gruppen", self._open_group_random)
         )
+
+        self.lbl_rule34_section = self._create_section_label("ONLINE")
+        side_layout.addWidget(self.lbl_rule34_section)
+        self.btn_rule34 = self._create_side_btn(
+            "⬇️  rule34 Import", self._fetch_rule34
+        )
+        side_layout.addWidget(self.btn_rule34)
 
         side_layout.addStretch()
 
@@ -366,6 +385,8 @@ class MainWindow(QMainWindow):
         self.btn_videos.setVisible(not ai)
         self.lbl_analysis_section.setVisible(ai)
         self.btn_analysis.setVisible(ai)
+        self.lbl_rule34_section.setVisible(not ai)
+        self.btn_rule34.setVisible(not ai)
         self.current_view = "Bilder"
         self.btn_bilder.setChecked(True)
         self.lbl_view_title.setText("🖼️ Bilder")
@@ -389,6 +410,57 @@ class MainWindow(QMainWindow):
         import_paths(
             self.db, paths, type_str="Bilder", group="", mode=self.config.mode
         )
+
+    def _fetch_rule34(self) -> None:
+        """Fetch the newest rule34 posts and import the downloaded files."""
+        if self.config.mode == MODE_AI:
+            return
+        dlg = Rule34Dialog(self, self.config)
+        if not dlg.exec():
+            return
+        for key, value in dlg.settings().items():
+            setattr(self.config, key, value)
+        save_configs(self.configs, self.config.db_path)
+
+        signature = query_signature(
+            self.config.rule34_tags, self.config.rule34_webm
+        )
+        last_id = self.config.rule34_last_ids.get(signature, 0)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = fetch_and_import(
+                self.db,
+                folder=self.config.folder,
+                tags=self.config.rule34_tags,
+                api_key=self.config.rule34_api_key,
+                user_id=self.config.rule34_user_id,
+                last_id=last_id,
+                limit=self.config.rule34_count,
+                webm=self.config.rule34_webm,
+            )
+        except (Rule34Error, OSError) as exc:
+            QMessageBox.warning(self, "rule34 Import", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if result.imported:
+            self.refresh_data()
+        summary = (
+            f"{result.imported} importiert, {result.duplicates} Duplikate, "
+            f"{result.skipped} übersprungen"
+        )
+        if result.failed:
+            QMessageBox.warning(
+                self,
+                "rule34 Import",
+                summary + "\n\nFehlgeschlagen:\n" + "\n".join(result.failed),
+            )
+            return
+        if result.newest_id:
+            self.config.rule34_last_ids[signature] = result.newest_id
+            save_configs(self.configs, self.config.db_path)
+        QMessageBox.information(self, "rule34 Import", summary)
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
         """Return an entry's preview pixmap, cached by its media path."""
