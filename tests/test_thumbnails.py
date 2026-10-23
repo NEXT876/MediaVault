@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PyQt6.QtGui import QImage
 
-from mediavault.gui import main_window
-from mediavault.gui.main_window import load_thumbnail
+from mediavault.gui import thumbnails
+from mediavault.gui.thumbnails import load_thumbnail
 from mediavault.models import MediaItem
 
 
@@ -42,9 +42,9 @@ def test_load_thumbnails_keeps_other_previews_when_one_fails(tmp_path, monkeypat
             raise OSError("broken file")
         return load_thumbnail(entry)
 
-    monkeypatch.setattr(main_window, "load_thumbnail", fake_load)
+    monkeypatch.setattr(thumbnails, "load_thumbnail", fake_load)
 
-    previews = main_window.load_thumbnails([good, bad])
+    previews = thumbnails.load_thumbnails([good, bad])
 
     assert previews[good.media_path] is not None
     assert previews[bad.media_path] is None

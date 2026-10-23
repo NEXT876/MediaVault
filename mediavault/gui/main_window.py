@@ -3,7 +3,6 @@
 import logging
 import os
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -14,11 +13,9 @@ from PyQt6.QtCore import (
     QRect,
     Qt,
     QTimer,
-    pyqtSignal,
 )
 from PyQt6.QtGui import (
     QCloseEvent,
-    QImage,
     QKeyEvent,
     QKeySequence,
     QPixmap,
@@ -27,7 +24,6 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -35,7 +31,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QProgressDialog,
     QPushButton,
     QRubberBand,
@@ -65,16 +60,13 @@ from mediavault.gui.dialogs import (
     Rule34PreviewDialog,
     Worker,
 )
+from mediavault.gui.downloads import DownloadJob, DownloadsPage, JobState
 from mediavault.gui.theme import ThemeManager
+from mediavault.gui.thumbnails import load_thumbnail, load_thumbnails
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
 from mediavault.importer import find_duplicate, import_paths, norm_path
 from mediavault.models import MediaDatabase, MediaItem
-from mediavault.rule34 import (
-    Post,
-    collect_new_posts_multi,
-    download_and_import,
-    fetch_preview,
-)
+from mediavault.rule34 import Post, collect_new_posts_multi, fetch_preview
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
@@ -82,156 +74,7 @@ logger = logging.getLogger(__name__)
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-def load_thumbnail(entry: MediaItem) -> QImage | None:
-    """Load and scale one preview image; safe outside the GUI thread."""
-    image: QImage | None = None
-    if entry.image_path:
-        image = QImage(entry.image_path)
-        if image.isNull():
-            logger.debug("Bild konnte nicht geladen werden: %s", entry.image_path)
-            image = None
-    elif entry.entry_type == "Videos":
-        image = OSHelper.get_video_frame_image(entry.video_link)
-        if image is None:
-            os_thumb = OSHelper.get_os_thumbnail(entry.video_link)
-            if os_thumb:
-                image = QImage(os_thumb)
-    if image is None or image.isNull():
-        return None
-    # Cards are ~176 px wide; keep the cache small.
-    return image.scaled(
-        512,
-        512,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-
-
-def load_thumbnails(entries: list[MediaItem]) -> dict[str, QImage | None]:
-    """Load previews for several entries, keyed by media path.
-
-    One broken file must not discard the previews of the whole batch.
-    """
-    previews: dict[str, QImage | None] = {}
-    for entry in entries:
-        try:
-            previews[entry.media_path] = load_thumbnail(entry)
-        except Exception:  # One bad file must not stop the batch.
-            logger.debug(
-                "Vorschau fehlgeschlagen: %s", entry.media_path, exc_info=True
-            )
-            previews[entry.media_path] = None
-    return previews
-
-
 ALL_GROUPS = "Alle Gruppen"
-
-
-@dataclass
-class DownloadJob:
-    """One rule34 import waiting in or running through the download queue."""
-
-    number: int
-    label: str
-    db: MediaDatabase
-    folder: str
-    tags: str
-    posts: list[Post]
-    selected_ids: set[int]
-    newest_ids: dict[str, int]
-    state: str = "waiting"
-    done: int = 0
-    total: int = 0
-    imported: int = 0
-    duplicates: int = 0
-    failed: int = 0
-    detail: str = ""
-
-
-_JOB_ICONS = {"waiting": "⏳", "running": "⬇️", "done": "✅", "error": "⚠️"}
-
-
-def download_status_text(job: DownloadJob) -> str:
-    """Return the short status line shown under a job's title."""
-    if job.state == "waiting":
-        return "Wartet in der Warteschlange"
-    if job.state == "running":
-        if job.total:
-            # ``done`` counts finished files; the next one is in progress.
-            return f"Lädt Datei {min(job.done + 1, job.total)} von {job.total}"
-        return "Startet …"
-    if job.state == "error":
-        return "Fehlgeschlagen"
-    parts = [f"{job.imported} importiert", f"{job.duplicates} Duplikate"]
-    if job.failed:
-        parts.append(f"{job.failed} fehlgeschlagen")
-    return ", ".join(parts)
-
-
-class _ProgressBridge(QObject):
-    """Deliver download progress from the worker thread to the GUI thread."""
-
-    progress = pyqtSignal(int, int)
-
-    def __init__(
-        self, callback: Callable[[int, int], None], parent: QObject | None = None
-    ) -> None:
-        super().__init__(parent)
-        self._callback = callback
-        self.progress.connect(self._deliver)
-
-    def _deliver(self, done: int, total: int) -> None:
-        """Forward one progress report to the GUI callback."""
-        self._callback(done, total)
-
-
-class DownloadRow(QFrame):
-    """Card on the downloads page showing one job's state and progress."""
-
-    def __init__(self, job: DownloadJob) -> None:
-        """Build the card and fill it with the job's current state."""
-        super().__init__()
-        self.setObjectName("DownloadRow")
-        self.lbl_icon = QLabel()
-        self.lbl_icon.setObjectName("DownloadIcon")
-        self.lbl_icon.setFixedWidth(26)
-        self.lbl_title = QLabel()
-        self.lbl_title.setObjectName("DownloadTitle")
-        self.lbl_status = QLabel()
-        self.lbl_status.setObjectName("MutedLabel")
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(6)
-        self.lbl_detail = QLabel()
-        self.lbl_detail.setObjectName("HintLabel")
-        self.lbl_detail.setWordWrap(True)
-
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
-        text_layout.addWidget(self.lbl_title)
-        text_layout.addWidget(self.lbl_status)
-        text_layout.addWidget(self.bar)
-        text_layout.addWidget(self.lbl_detail)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(10)
-        layout.addWidget(self.lbl_icon, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(text_layout, 1)
-        self.set_job(job)
-
-    def set_job(self, job: DownloadJob) -> None:
-        """Update icon, title, status, progress bar and error detail."""
-        done_with_errors = job.state == "done" and job.failed > 0
-        self.lbl_icon.setText("⚠️" if done_with_errors else _JOB_ICONS[job.state])
-        self.lbl_title.setText(f"#{job.number}  {job.label}")
-        self.lbl_status.setText(download_status_text(job))
-        self.bar.setVisible(job.state == "running")
-        self.bar.setRange(0, max(job.total, 1))
-        self.bar.setValue(job.done)
-        self.lbl_detail.setText(job.detail)
-        self.lbl_detail.setVisible(bool(job.detail))
-        self.setToolTip(job.detail)
 
 
 def visible_entries(
@@ -318,12 +161,6 @@ class MainWindow(QMainWindow):
         # Paths the last folder sync could not import; hidden from later syncs.
         self._sync_ignored: set[str] = set()
 
-        # rule34 imports run one at a time in the background, so the window
-        # stays usable and further imports wait in the queue.
-        self._download_jobs: list[DownloadJob] = []
-        self._download_rows: dict[int, DownloadRow] = {}
-        self._download_active: DownloadJob | None = None
-        self._download_seq = 0
         # The worker that fetches rule34 posts before the preview opens.
         self._rule34_fetch: Worker | None = None
 
@@ -335,12 +172,6 @@ class MainWindow(QMainWindow):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(200)
         self._search_timer.timeout.connect(self.refresh_data)
-
-        # Reveal the queue page only when a download takes noticeably long.
-        self._download_timer = QTimer(self)
-        self._download_timer.setSingleShot(True)
-        self._download_timer.setInterval(1500)
-        self._download_timer.timeout.connect(self._reveal_downloads)
 
         self._spinner_frame = 0
         self._spinner_timer = QTimer(self)
@@ -569,51 +400,11 @@ class MainWindow(QMainWindow):
         self.scroll_area.viewport().setObjectName("GridViewport")
         self.scroll_area.viewport().installEventFilter(self)
 
-        self.downloads_page = QWidget()
-        downloads_layout = QVBoxLayout(self.downloads_page)
-        downloads_layout.setContentsMargins(0, 0, 0, 0)
-        downloads_layout.setSpacing(8)
-        lbl_downloads_hint = QLabel(
-            "Downloads laufen im Hintergrund weiter. Du kannst die Bibliothek "
-            "benutzen und weitere Importe einreihen."
-        )
-        lbl_downloads_hint.setObjectName("HintLabel")
-        lbl_downloads_hint.setWordWrap(True)
-        downloads_layout.addWidget(lbl_downloads_hint)
-
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        self.lbl_downloads_summary = QLabel()
-        self.lbl_downloads_summary.setObjectName("SectionLabel")
-        self.btn_clear_downloads = QPushButton("Fertige entfernen")
-        self.btn_clear_downloads.setProperty("variant", "ghost")
-        self.btn_clear_downloads.clicked.connect(self._clear_finished_downloads)
-        header.addWidget(self.lbl_downloads_summary)
-        header.addStretch(1)
-        header.addWidget(self.btn_clear_downloads)
-        downloads_layout.addLayout(header)
-
-        self.lbl_downloads_activity = QLabel()
-        self.lbl_downloads_activity.setObjectName("HintLabel")
-        self.lbl_downloads_activity.setWordWrap(True)
-        downloads_layout.addWidget(self.lbl_downloads_activity)
-
-        self.downloads_scroll = QScrollArea()
-        self.downloads_scroll.setWidgetResizable(True)
-        self.downloads_scroll.setObjectName("CardScroll")
-        downloads_container = QWidget()
-        downloads_container.setObjectName("GridContainer")
-        self.downloads_layout = QVBoxLayout(downloads_container)
-        self.downloads_layout.setContentsMargins(0, 0, 0, 0)
-        self.downloads_layout.setSpacing(8)
-        self.downloads_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.downloads_scroll.setWidget(downloads_container)
-        downloads_layout.addWidget(self.downloads_scroll, 1)
-
-        self.lbl_downloads_empty = QLabel("Keine Downloads.")
-        self.lbl_downloads_empty.setObjectName("MutedLabel")
-        self.lbl_downloads_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        downloads_layout.addWidget(self.lbl_downloads_empty)
+        self.downloads_page = DownloadsPage()
+        self.downloads_page.job_finished.connect(self._on_download_finished)
+        self.downloads_page.queue_changed.connect(self._sync_downloads_button)
+        self.downloads_page.reveal_requested.connect(self._reveal_downloads)
+        self.downloads_page.emptied.connect(self._leave_empty_downloads)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.scroll_area)
@@ -669,7 +460,6 @@ class MainWindow(QMainWindow):
         self.lbl_empty.hide()
         self._set_loading(False)
         self.pages.setCurrentWidget(self.downloads_page)
-        self._render_downloads()
 
     def _set_library_controls_visible(self, visible: bool) -> None:
         """Show or hide the filter widgets that only apply to the grid."""
@@ -874,11 +664,9 @@ class MainWindow(QMainWindow):
         self.btn_rule34.setText(
             "⬇️  Lade Posts …" if loading else "⬇️  rule34 Import"
         )
-        self.lbl_downloads_activity.setText(
+        self.downloads_page.set_activity(
             "🔎  Lade Posts von rule34 …" if loading else ""
         )
-        self.lbl_downloads_activity.setVisible(loading)
-        self._render_downloads()
 
     def _load_rule34_preview(
         self,
@@ -943,153 +731,54 @@ class MainWindow(QMainWindow):
         newest_ids: dict[str, int],
         selected_ids: set[int],
     ) -> None:
-        """Add a rule34 import to the queue and start it when nothing runs."""
-        self._download_seq += 1
-        self._download_jobs.append(
-            DownloadJob(
-                number=self._download_seq,
-                label=(
-                    f"{self.config.rule34_tags or 'ohne Tags'} · "
-                    f"{len(selected_ids)} Posts"
+        """Add a rule34 import to the background queue."""
+        self.downloads_page.enqueue(
+            label=(
+                f"{self.config.rule34_tags or 'ohne Tags'} · "
+                f"{len(selected_ids)} Posts"
+            ),
+            db=db,
+            folder=self.config.folder,
+            tags=self.config.rule34_tags,
+            posts=posts,
+            selected_ids=selected_ids,
+            newest_ids=newest_ids,
+        )
+
+    def _on_download_finished(self, job: DownloadJob) -> None:
+        """Store post IDs after a clean run and refresh the visible grid."""
+        if job.state is JobState.DONE and not job.failed:
+            # Keep the IDs only when every selected post reached the disk.
+            config = next(
+                (
+                    config
+                    for config in self.configs
+                    if config.db_path == job.db.filepath
                 ),
-                db=db,
-                folder=self.config.folder,
-                tags=self.config.rule34_tags,
-                posts=posts,
-                selected_ids=selected_ids,
-                newest_ids=newest_ids,
+                None,
             )
-        )
-        self._render_downloads()
-        if self._download_active is None:
-            self._start_next_download()
-        self._download_timer.start()
+            if config is not None and job.newest_ids:
+                config.rule34_last_ids.update(job.newest_ids)
+                save_configs(self.configs, self.config.db_path)
+        if job.imported and job.db is self.db:
+            self.refresh_data()
 
-    def _start_next_download(self) -> None:
-        """Start the first waiting job; only one download runs at a time."""
-        job = next(
-            (job for job in self._download_jobs if job.state == "waiting"), None
-        )
-        self._download_active = job
-        if job is None:
-            return
-        job.state = "running"
-        job.done = 0
-        job.total = len(job.selected_ids)
-        self._render_downloads()
-        # The bridge turns the worker-thread callback into a GUI-thread signal.
-        bridge = _ProgressBridge(
-            lambda done, total: self._on_download_progress(job, done, total)
-        )
-        worker = Worker(
-            self,
-            download_and_import,
-            db=job.db,
-            posts=job.posts,
-            folder=job.folder,
-            tags=job.tags,
-            selected_ids=job.selected_ids,
-            progress=bridge.progress.emit,
-        )
-        bridge.setParent(worker)
-        worker.finished.connect(lambda: self._finish_download(worker, job))
-        worker.start()
-
-    def _on_download_progress(self, job: DownloadJob, done: int, total: int) -> None:
-        """Update one job's progress bar while its files download."""
-        if job.state != "running":
-            return
-        job.done = done
-        job.total = total
-        row = self._download_rows.get(job.number)
-        if row is not None:
-            row.set_job(job)
-
-    def _finish_download(self, worker: Worker, job: DownloadJob) -> None:
-        """Record a finished job, store its post IDs and start the next one."""
-        self._download_active = None
-        error = worker.error
-        result = worker.result
-        worker.deleteLater()
-        if error is not None:
-            job.state = "error"
-            job.detail = str(error)
-        elif result is not None:
-            job.state = "done"
-            job.imported = result.imported
-            job.duplicates = result.duplicates
-            job.failed = len(result.failed)
-            job.detail = "\n".join(result.failed)
-            if not result.failed:
-                # Same rule as before: keep the IDs only when every selected
-                # post reached the disk.
-                config = next(
-                    (
-                        config
-                        for config in self.configs
-                        if config.db_path == job.db.filepath
-                    ),
-                    None,
-                )
-                if config is not None and job.newest_ids:
-                    config.rule34_last_ids.update(job.newest_ids)
-                    save_configs(self.configs, self.config.db_path)
-            if result.imported and job.db is self.db:
-                self.refresh_data()
-        self._render_downloads()
-        self._start_next_download()
-
-    def _reveal_downloads(self) -> None:
-        """Switch to the queue page when a download still runs after a while."""
-        if self._download_active is not None and (
-            self.pages.currentWidget() is self.scroll_area
-        ):
-            self._show_downloads()
-
-    def _render_downloads(self) -> None:
-        """Redraw the job cards, the summary line and the sidebar button."""
-        while self.downloads_layout.count():
-            item = self.downloads_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.hide()
-                widget.setParent(None)
-                widget.deleteLater()
-        self._download_rows = {}
-        for job in self._download_jobs:
-            row = DownloadRow(job)
-            self._download_rows[job.number] = row
-            self.downloads_layout.addWidget(row)
-
-        open_jobs = sum(
-            1 for job in self._download_jobs if job.state in ("waiting", "running")
-        )
-        finished = len(self._download_jobs) - open_jobs
-        has_jobs = bool(self._download_jobs)
-        loading = self._rule34_fetch is not None
-        self.lbl_downloads_empty.setVisible(not has_jobs and not loading)
-        self.downloads_scroll.setVisible(has_jobs)
-        self.lbl_downloads_summary.setVisible(has_jobs)
-        self.lbl_downloads_summary.setText(
-            f"{open_jobs} offen · {finished} abgeschlossen"
-        )
-        self.btn_clear_downloads.setVisible(finished > 0)
+    def _sync_downloads_button(self) -> None:
+        """Mirror the queue size on the sidebar button."""
+        open_jobs = self.downloads_page.open_count
         self.btn_downloads.setText(
             f"⬇️  Downloads ({open_jobs})" if open_jobs else "⬇️  Downloads"
         )
-        self.btn_downloads.setVisible(has_jobs)
+        self.btn_downloads.setVisible(self.downloads_page.has_jobs)
 
-    def _clear_finished_downloads(self) -> None:
-        """Drop finished jobs from the queue view."""
-        self._download_jobs = [
-            job
-            for job in self._download_jobs
-            if job.state in ("waiting", "running")
-        ]
-        self._render_downloads()
-        on_downloads = self.pages.currentWidget() is self.downloads_page
-        if not self._download_jobs and on_downloads:
-            # The sidebar button is gone now, so leave the empty page.
+    def _reveal_downloads(self) -> None:
+        """Switch to the queue page when a download still runs after a while."""
+        if self.pages.currentWidget() is self.scroll_area:
+            self._show_downloads()
+
+    def _leave_empty_downloads(self) -> None:
+        """Leave the download page once the last job is cleared."""
+        if self.pages.currentWidget() is self.downloads_page:
             self.switch_view("Bilder")
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
@@ -1224,7 +913,7 @@ class MainWindow(QMainWindow):
     # --- Grid ---
     def closeEvent(self, event: QCloseEvent) -> None:
         """Keep the window open while a background download still runs."""
-        if self._download_active is not None or self._rule34_fetch is not None:
+        if self.downloads_page.is_busy or self._rule34_fetch is not None:
             QMessageBox.information(
                 self,
                 "Download läuft",
