@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import shutil
+import threading
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, fields
@@ -60,55 +61,67 @@ class MediaDatabase:
         """Create a database bound to ``filepath`` with no loaded entries."""
         self.filepath = filepath
         self.entries: list[MediaItem] = []
+        # Background downloads write while the GUI thread reads and edits.
+        self._lock = threading.RLock()
 
     def load(self) -> None:
         """Load entries from the JSON file, if it exists."""
-        os.makedirs(os.path.dirname(os.path.abspath(self.filepath)), exist_ok=True)
-        if not os.path.exists(self.filepath):
-            return
-        try:
-            with open(self.filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if not isinstance(data, list) or not all(
-                    isinstance(item, dict) for item in data
-                ):
-                    raise ValueError("Unerwartetes Datenformat")
-                self.entries = [MediaItem.from_dict(item) for item in data]
-        except (json.JSONDecodeError, ValueError):
-            logger.error("JSON beschädigt: %s", self.filepath)
-            backup = f"{self.filepath}.corrupt.{int(time.time())}"
+        with self._lock:
+            os.makedirs(
+                os.path.dirname(os.path.abspath(self.filepath)), exist_ok=True
+            )
+            if not os.path.exists(self.filepath):
+                return
             try:
-                shutil.copy(self.filepath, backup)
-                logger.info("Backup angelegt: %s", backup)
-            except OSError:
-                pass
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if not isinstance(data, list) or not all(
+                        isinstance(item, dict) for item in data
+                    ):
+                        raise ValueError("Unerwartetes Datenformat")
+                    self.entries = [MediaItem.from_dict(item) for item in data]
+            except (json.JSONDecodeError, ValueError):
+                logger.error("JSON beschädigt: %s", self.filepath)
+                backup = f"{self.filepath}.corrupt.{int(time.time())}"
+                try:
+                    shutil.copy(self.filepath, backup)
+                    logger.info("Backup angelegt: %s", backup)
+                except OSError:
+                    pass
 
     def save(self) -> None:
         """Write all entries atomically to the JSON file."""
-        parent = os.path.dirname(os.path.abspath(self.filepath))
-        os.makedirs(parent, exist_ok=True)
-        tmp = self.filepath + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(
-                [e.to_dict() for e in self.entries], f, indent=4, ensure_ascii=False
-            )
-        os.replace(tmp, self.filepath)
+        with self._lock:
+            parent = os.path.dirname(os.path.abspath(self.filepath))
+            os.makedirs(parent, exist_ok=True)
+            tmp = self.filepath + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(
+                    [e.to_dict() for e in self.entries],
+                    f,
+                    indent=4,
+                    ensure_ascii=False,
+                )
+            os.replace(tmp, self.filepath)
 
     def add(self, entry: MediaItem) -> None:
         """Append one entry and persist the database."""
-        self.entries.append(entry)
-        self.save()
+        with self._lock:
+            self.entries.append(entry)
+            self.save()
 
     def add_many(self, entries: Iterable[MediaItem]) -> None:
         """Append several entries and persist once."""
-        self.entries.extend(entries)
-        self.save()
+        with self._lock:
+            self.entries.extend(entries)
+            self.save()
 
     def delete_multiple(self, entries_to_delete: Iterable[MediaItem]) -> None:
         """Remove the given entries and persist the database."""
-        doomed = set(entries_to_delete)
-        self.entries = [e for e in self.entries if e not in doomed]
-        self.save()
+        with self._lock:
+            doomed = set(entries_to_delete)
+            self.entries = [e for e in self.entries if e not in doomed]
+            self.save()
 
     def get_by_type(self, entry_type: str) -> list[MediaItem]:
         """Return all entries of the given media type."""

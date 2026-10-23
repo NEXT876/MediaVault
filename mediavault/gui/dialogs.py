@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -630,11 +631,15 @@ class ConfigDialog(QDialog):
 class Rule34Dialog(QDialog):
     """Collect rule34 credentials and search settings for the active config."""
 
-    def __init__(self, parent: QWidget | None, config: VaultConfig) -> None:
+    def __init__(
+        self, parent: QWidget | None, config: VaultConfig, configs: list[VaultConfig]
+    ) -> None:
         """Initialize the form from the config's saved values."""
         super().__init__(parent)
         self.setWindowTitle("rule34.xxx Import")
         self.setMinimumWidth(480)
+        self.config = config
+        self.configs = configs
         self._suggest_worker: Worker | None = None
         self._suggest_word = ""
         self._suggest_range = (0, 0)
@@ -681,6 +686,21 @@ class Rule34Dialog(QDialog):
         self.lst_tags.itemClicked.connect(self._apply_suggestion)
         self.lst_tags.itemActivated.connect(self._apply_suggestion)
         layout.addWidget(self.lst_tags)
+
+        saved_row = QHBoxLayout()
+        self.combo_saved_tags = QComboBox()
+        self.combo_saved_tags.activated.connect(self._load_saved_tags)
+        btn_save_tags = QPushButton("Tags speichern")
+        btn_save_tags.setProperty("variant", "ghost")
+        btn_save_tags.clicked.connect(self._save_saved_tags)
+        btn_delete_tags = QPushButton("Löschen")
+        btn_delete_tags.setProperty("variant", "ghost")
+        btn_delete_tags.clicked.connect(self._delete_saved_tags)
+        saved_row.addWidget(self.combo_saved_tags, 1)
+        saved_row.addWidget(btn_save_tags)
+        saved_row.addWidget(btn_delete_tags)
+        layout.addLayout(saved_row)
+        self._refresh_saved_tags()
 
         self._suggest_timer = QTimer(self)
         self._suggest_timer.setSingleShot(True)
@@ -797,6 +817,55 @@ class Rule34Dialog(QDialog):
         self.inp_tags.setFocus()
         self._suggest_word = ""
         self._hide_suggestions()
+
+    def _refresh_saved_tags(self, selected: str | None = None) -> None:
+        """Rebuild the preset list and optionally select one entry."""
+        self.combo_saved_tags.clear()
+        self.combo_saved_tags.addItem("Gespeicherte Tag-Configs …", "")
+        for name in sorted(self.config.rule34_saved_tags, key=str.casefold):
+            self.combo_saved_tags.addItem(name, name)
+        if selected:
+            self.combo_saved_tags.setCurrentIndex(
+                max(self.combo_saved_tags.findData(selected), 0)
+            )
+
+    def _load_saved_tags(self) -> None:
+        """Replace the tag field with the selected saved preset."""
+        name = self.combo_saved_tags.currentData()
+        if name:
+            self.inp_tags.setPlainText(self.config.rule34_saved_tags[name])
+
+    def _save_saved_tags(self) -> None:
+        """Store the current tag text under a name the user chooses."""
+        text = "\n".join(split_queries(self.inp_tags.toPlainText()))
+        if not text:
+            QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
+            return
+        name, ok = QInputDialog.getText(
+            self, "Tags speichern", "Name für diese Tag-Config:", text=text.splitlines()[0]
+        )
+        name = name.strip()
+        if not ok or not name:
+            return
+        # An existing name is overwritten on purpose: that is how a preset
+        # gets updated after the user changed the tags.
+        self.config.rule34_saved_tags[name] = text
+        save_configs(self.configs, self.config.db_path)
+        self._refresh_saved_tags(name)
+
+    def _delete_saved_tags(self) -> None:
+        """Remove the selected preset after confirmation."""
+        name = self.combo_saved_tags.currentData()
+        if not name:
+            return
+        answer = QMessageBox.question(
+            self, "Tags löschen", f"Gespeicherte Tags „{name}“ löschen?"
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.config.rule34_saved_tags.pop(name, None)
+        save_configs(self.configs, self.config.db_path)
+        self._refresh_saved_tags()
 
     def done(self, result: int) -> None:
         """Stop the suggestion timer and worker before the dialog closes."""

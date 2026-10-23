@@ -3,11 +3,18 @@
 import logging
 import os
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
-from PyQt6.QtGui import QKeyEvent, QKeySequence, QPixmap, QResizeEvent
+from PyQt6.QtGui import (
+    QCloseEvent,
+    QKeyEvent,
+    QKeySequence,
+    QPixmap,
+    QResizeEvent,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -16,6 +23,8 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
@@ -23,6 +32,7 @@ from PyQt6.QtWidgets import (
     QRubberBand,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -61,6 +71,22 @@ from mediavault.utils import OSHelper
 logger = logging.getLogger(__name__)
 
 ALL_GROUPS = "Alle Gruppen"
+
+
+@dataclass
+class DownloadJob:
+    """One rule34 import waiting in or running through the download queue."""
+
+    number: int
+    label: str
+    db: MediaDatabase
+    folder: str
+    tags: str
+    posts: list[Post]
+    selected_ids: set[int]
+    newest_ids: dict[str, int]
+    status: str = "Wartet"
+    detail: str = ""
 
 
 def visible_entries(
@@ -123,6 +149,9 @@ class MainWindow(QMainWindow):
 
         self.db = MediaDatabase(self.config.db_path)
         self.db.load()
+        # Keyed by db_path, so switching back reuses the object a background
+        # download is writing to instead of overwriting its entries.
+        self._databases: dict[str, MediaDatabase] = {self.config.db_path: self.db}
 
         self.theme = theme_manager or ThemeManager()
         self.current_view: str = "Bilder"
@@ -142,6 +171,12 @@ class MainWindow(QMainWindow):
         # Paths the last folder sync could not import; hidden from later syncs.
         self._sync_ignored: set[str] = set()
 
+        # rule34 imports run one at a time in the background, so the window
+        # stays usable and further imports wait in the queue.
+        self._download_jobs: list[DownloadJob] = []
+        self._download_active: DownloadJob | None = None
+        self._download_seq = 0
+
         self._autoscroll_timer = QTimer(self)
         self._autoscroll_timer.setInterval(40)
         self._autoscroll_timer.timeout.connect(self._autoscroll_step)
@@ -150,6 +185,12 @@ class MainWindow(QMainWindow):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(200)
         self._search_timer.timeout.connect(self.refresh_data)
+
+        # Reveal the queue page only when a download takes noticeably long.
+        self._download_timer = QTimer(self)
+        self._download_timer.setSingleShot(True)
+        self._download_timer.setInterval(1500)
+        self._download_timer.timeout.connect(self._reveal_downloads)
 
         self._setup_ui()
         self._sync_theme_button()
@@ -233,6 +274,11 @@ class MainWindow(QMainWindow):
             "⬇️  rule34 Import", self._fetch_rule34
         )
         side_layout.addWidget(self.btn_rule34)
+        self.btn_downloads = self._create_side_btn(
+            "⬇️  Downloads", self._show_downloads, checkable=True
+        )
+        self.btn_downloads.setVisible(False)
+        side_layout.addWidget(self.btn_downloads)
 
         side_layout.addStretch()
 
@@ -275,9 +321,9 @@ class MainWindow(QMainWindow):
         self.inp_search.returnPressed.connect(self._flush_search)
         top_bar.addWidget(self.inp_search)
 
-        lbl_group = QLabel("Gruppe")
-        lbl_group.setObjectName("MutedLabel")
-        top_bar.addWidget(lbl_group)
+        self.lbl_group_filter = QLabel("Gruppe")
+        self.lbl_group_filter.setObjectName("MutedLabel")
+        top_bar.addWidget(self.lbl_group_filter)
         self.combo_group = QComboBox()
         self.combo_group.setMinimumWidth(140)
         self.combo_group.currentTextChanged.connect(self.refresh_data)
@@ -361,7 +407,29 @@ class MainWindow(QMainWindow):
         self.scroll_area.setWidget(self.grid_container)
         self.scroll_area.viewport().setObjectName("GridViewport")
         self.scroll_area.viewport().installEventFilter(self)
-        content_layout.addWidget(self.scroll_area, 1)
+
+        self.downloads_page = QWidget()
+        downloads_layout = QVBoxLayout(self.downloads_page)
+        downloads_layout.setContentsMargins(0, 0, 0, 0)
+        downloads_layout.setSpacing(8)
+        lbl_downloads_hint = QLabel(
+            "Downloads laufen im Hintergrund weiter. Du kannst die Bibliothek "
+            "benutzen und weitere Importe einreihen."
+        )
+        lbl_downloads_hint.setObjectName("HintLabel")
+        lbl_downloads_hint.setWordWrap(True)
+        downloads_layout.addWidget(lbl_downloads_hint)
+        self.lbl_downloads_empty = QLabel("Keine Downloads.")
+        self.lbl_downloads_empty.setObjectName("MutedLabel")
+        self.lbl_downloads_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        downloads_layout.addWidget(self.lbl_downloads_empty)
+        self.downloads_list = QListWidget()
+        downloads_layout.addWidget(self.downloads_list, 1)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.scroll_area)
+        self.pages.addWidget(self.downloads_page)
+        content_layout.addWidget(self.pages, 1)
 
         main_layout.addWidget(content, 1)
 
@@ -391,11 +459,37 @@ class MainWindow(QMainWindow):
         self.current_view = view
         self.btn_bilder.setChecked(view == "Bilder")
         self.btn_videos.setChecked(view == "Videos")
+        self.btn_downloads.setChecked(False)
         self.lbl_view_title.setText("🖼️ Bilder" if view == "Bilder" else "🎬 Videos")
+        self.pages.setCurrentWidget(self.scroll_area)
+        self._set_library_controls_visible(True)
+        self.action_bar.show()
         self._cancel_drag()
         self._apply_selection(set())
         self._anchor_entry = None
         self.refresh_data()
+
+    def _show_downloads(self) -> None:
+        """Show the background download queue without leaving the library."""
+        self._cancel_drag()
+        self._apply_selection(set())
+        self.btn_downloads.setChecked(True)
+        self.lbl_view_title.setText("⬇️ Downloads")
+        self._set_library_controls_visible(False)
+        self.action_bar.hide()
+        self.lbl_empty.hide()
+        self.pages.setCurrentWidget(self.downloads_page)
+        self._render_downloads()
+
+    def _set_library_controls_visible(self, visible: bool) -> None:
+        """Show or hide the filter widgets that only apply to the grid."""
+        for widget in (
+            self.inp_search,
+            self.lbl_group_filter,
+            self.combo_group,
+            self.combo_sort,
+        ):
+            widget.setVisible(visible)
 
     def _apply_config_ui(self) -> None:
         """Show only the controls that fit the active config's mode."""
@@ -411,6 +505,10 @@ class MainWindow(QMainWindow):
         self.btn_rule34.setVisible(not ai)
         self.current_view = "Bilder"
         self.btn_bilder.setChecked(True)
+        self.btn_downloads.setChecked(False)
+        self.pages.setCurrentWidget(self.scroll_area)
+        self._set_library_controls_visible(True)
+        self.action_bar.show()
         self.lbl_view_title.setText("🖼️ Bilder")
         self.inp_search.setPlaceholderText(
             "Titel, Beschreibung, Prompt suchen…"
@@ -552,7 +650,7 @@ class MainWindow(QMainWindow):
         """Fetch new rule34 posts and show them for selection."""
         if self.config.mode == MODE_AI:
             return
-        dlg = Rule34Dialog(self, self.config)
+        dlg = Rule34Dialog(self, self.config, self.configs)
         if not dlg.exec():
             return
         for key, value in dlg.settings().items():
@@ -629,50 +727,110 @@ class MainWindow(QMainWindow):
         if not selected:
             QMessageBox.information(self, "rule34 Import", "Keine Posts ausgewählt.")
             return
-        importer = Worker(
+        self._queue_rule34_download(posts, newest_ids, selected)
+
+    # --- Download queue ---
+    def _queue_rule34_download(
+        self, posts: list[Post], newest_ids: dict[str, int], selected_ids: set[int]
+    ) -> None:
+        """Add a rule34 import to the queue and start it when nothing runs."""
+        self._download_seq += 1
+        self._download_jobs.append(
+            DownloadJob(
+                number=self._download_seq,
+                label=(
+                    f"{self.config.rule34_tags or 'ohne Tags'} · "
+                    f"{len(selected_ids)} Posts"
+                ),
+                db=self.db,
+                folder=self.config.folder,
+                tags=self.config.rule34_tags,
+                posts=posts,
+                selected_ids=selected_ids,
+                newest_ids=newest_ids,
+            )
+        )
+        self._render_downloads()
+        if self._download_active is None:
+            self._start_next_download()
+        self._download_timer.start()
+
+    def _start_next_download(self) -> None:
+        """Start the first waiting job; only one download runs at a time."""
+        job = next(
+            (job for job in self._download_jobs if job.status == "Wartet"), None
+        )
+        self._download_active = job
+        if job is None:
+            return
+        job.status = "Läuft"
+        self._render_downloads()
+        worker = Worker(
             self,
             download_and_import,
-            db=self.db,
-            posts=posts,
-            folder=self.config.folder,
-            tags=self.config.rule34_tags,
-            selected_ids=selected,
+            db=job.db,
+            posts=job.posts,
+            folder=job.folder,
+            tags=job.tags,
+            selected_ids=job.selected_ids,
         )
-        progress = self._busy_progress("Lade ausgewählte Posts …")
-        importer.finished.connect(
-            lambda: self._apply_rule34_result(importer, newest_ids, progress)
-        )
-        importer.start()
-        progress.show()
+        worker.finished.connect(lambda: self._finish_download(worker, job))
+        worker.start()
 
-    def _apply_rule34_result(
-        self, worker: Worker, newest_ids: dict[str, int], progress: QProgressDialog
-    ) -> None:
-        """Report a finished rule34 import and store the newest post IDs."""
-        progress.close()
-        progress.deleteLater()
+    def _finish_download(self, worker: Worker, job: DownloadJob) -> None:
+        """Record a finished job, store its post IDs and start the next one."""
         worker.deleteLater()
+        self._download_active = None
         if worker.error is not None:
-            QMessageBox.warning(self, "rule34 Import", str(worker.error))
-            return
-        result = worker.result
-        if result is None:
-            return
-        if result.imported:
-            self.refresh_data()
-        summary = f"{result.imported} importiert, {result.duplicates} Duplikate"
-        if result.failed:
-            QMessageBox.warning(
-                self,
-                "rule34 Import",
-                summary + "\n\nFehlgeschlagen:\n" + "\n".join(result.failed),
-            )
-            return
-        if newest_ids:
-            # Replace, so a reset can move the stored ID back after deletions.
-            self.config.rule34_last_ids.update(newest_ids)
-            save_configs(self.configs, self.config.db_path)
-        QMessageBox.information(self, "rule34 Import", summary)
+            job.status = "Fehlgeschlagen"
+            job.detail = str(worker.error)
+        elif worker.result is not None:
+            result = worker.result
+            job.status = f"{result.imported} importiert, {result.duplicates} Duplikate"
+            if result.failed:
+                job.status += f", {len(result.failed)} fehlgeschlagen"
+                job.detail = "\n".join(result.failed)
+            else:
+                # Same rule as before: keep the IDs only when every selected
+                # post reached the disk.
+                config = next(
+                    (
+                        config
+                        for config in self.configs
+                        if config.db_path == job.db.filepath
+                    ),
+                    None,
+                )
+                if config is not None and job.newest_ids:
+                    config.rule34_last_ids.update(job.newest_ids)
+                    save_configs(self.configs, self.config.db_path)
+            if result.imported and job.db is self.db:
+                self.refresh_data()
+        self._render_downloads()
+        self._start_next_download()
+
+    def _reveal_downloads(self) -> None:
+        """Switch to the queue page when a download still runs after a while."""
+        if self._download_active is not None and (
+            self.pages.currentWidget() is self.scroll_area
+        ):
+            self._show_downloads()
+
+    def _render_downloads(self) -> None:
+        """Redraw the queue list and the sidebar button label."""
+        self.downloads_list.clear()
+        for job in self._download_jobs:
+            item = QListWidgetItem(f"#{job.number} · {job.label} · {job.status}")
+            item.setToolTip(job.detail)
+            self.downloads_list.addItem(item)
+        self.lbl_downloads_empty.setVisible(not self._download_jobs)
+        pending = sum(
+            1 for job in self._download_jobs if job.status in ("Wartet", "Läuft")
+        )
+        self.btn_downloads.setText(
+            f"⬇️  Downloads ({pending})" if pending else "⬇️  Downloads"
+        )
+        self.btn_downloads.setVisible(bool(self._download_jobs))
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
         """Return an entry's preview pixmap, cached by its media path."""
@@ -753,12 +911,27 @@ class MainWindow(QMainWindow):
         for card in self.cards:
             card.set_selected(card.entry in self.selected_entries)
 
-        self.lbl_empty.setVisible(not self.cards)
+        self.lbl_empty.setVisible(
+            not self.cards and self.pages.currentWidget() is self.scroll_area
+        )
         self._update_columns()
         self._reflow_grid()
         self._update_action_bar()
 
     # --- Grid ---
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Keep the window open while a background download still runs."""
+        if self._download_active is not None:
+            QMessageBox.information(
+                self,
+                "Download läuft",
+                "Ein Download läuft noch. Bitte warte, bis er fertig ist, "
+                "damit keine Datei halb geschrieben wird.",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Recalculate the grid's column count when the window is resized."""
         super().resizeEvent(event)
@@ -1019,8 +1192,12 @@ class MainWindow(QMainWindow):
             (config for config in self.configs if config.db_path == last),
             dlg.selected_config,
         )
-        self.db = MediaDatabase(self.config.db_path)
-        self.db.load()
+        # Reuse the object a background download may still be writing to.
+        self.db = self._databases.get(self.config.db_path)
+        if self.db is None:
+            self.db = MediaDatabase(self.config.db_path)
+            self.db.load()
+            self._databases[self.config.db_path] = self.db
 
         self.thumbnail_cache.clear()
         self.recent_picks = []

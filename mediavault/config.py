@@ -35,6 +35,7 @@ class VaultConfig:
     rule34_last_ids: dict[str, int] = field(default_factory=dict)
     # Appended last so existing positional construction keeps working.
     folder_last_sync: str = ""
+    rule34_saved_tags: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
@@ -52,6 +53,7 @@ class VaultConfig:
             rule34_webm=_bool_setting(data.get("rule34_webm")),
             rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
             folder_last_sync=str(data.get("folder_last_sync") or ""),
+            rule34_saved_tags=_saved_tags(data.get("rule34_saved_tags")),
         )
 
 
@@ -88,6 +90,20 @@ def _last_ids(value: Any) -> dict[str, int]:
         if number > 0:
             result[key] = number
     return result
+
+
+def _saved_tags(value: Any) -> dict[str, str]:
+    """Return only named, non-empty tag presets from stored data."""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        name: tags
+        for name, tags in value.items()
+        if isinstance(name, str)
+        and name.strip()
+        and isinstance(tags, str)
+        and tags.strip()
+    }
 
 
 def _default_config() -> VaultConfig:

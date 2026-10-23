@@ -149,6 +149,7 @@ def test_rule34_settings_default_for_old_config():
     assert config.rule34_count == 10
     assert config.rule34_webm is False
     assert config.rule34_last_ids == {}
+    assert config.rule34_saved_tags == {}
 
 
 def test_rule34_settings_round_trip(tmp_path):
@@ -170,6 +171,21 @@ def test_rule34_settings_round_trip(tmp_path):
     loaded, _last = load_configs(str(path))
 
     assert loaded == [config]
+
+
+def test_rule34_saved_tags_round_trip_and_coercion(tmp_path):
+    path = tmp_path / "configs.json"
+    config = VaultConfig("A", MODE_NORMAL, "a.json")
+    config.rule34_saved_tags = {"Abends": "cat dog\nfox", "Leer": " "}
+
+    save_configs([config], config.db_path, str(path))
+    loaded, _last = load_configs(str(path))
+
+    # Empty presets are dropped while loading.
+    assert loaded[0].rule34_saved_tags == {"Abends": "cat dog\nfox"}
+    assert VaultConfig.from_dict(
+        {"name": "B", "rule34_saved_tags": {"ok": "cat", "": "x", 3: "y"}}
+    ).rule34_saved_tags == {"ok": "cat"}
 
 
 def test_rule34_settings_are_coerced_from_stored_data():
