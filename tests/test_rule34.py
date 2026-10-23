@@ -11,14 +11,18 @@ from mediavault.rule34 import (
     Post,
     Rule34Error,
     build_query,
+    collect_new_posts_multi,
     download_and_import,
     download_post,
     fetch_and_import,
     fetch_posts,
     fetch_preview,
+    fetch_tag_suggestions,
     parse_posts,
     query_signature,
     select_new_posts,
+    split_queries,
+    tag_at,
 )
 
 
@@ -65,6 +69,110 @@ def test_build_query_adds_webm_and_newest_sort():
 
 def test_build_query_drops_user_sort_tokens():
     assert build_query("cat sort:score:desc", False) == "cat sort:id:desc"
+
+
+def test_split_queries_returns_one_normalized_query_per_line():
+    text = "  Cat   Dog \n\n cat dog\nfoo\n  \n"
+
+    assert split_queries(text) == ["Cat Dog", "foo"]
+
+
+def test_tag_at_returns_word_around_cursor():
+    text = "cat dog\nfox"
+
+    assert tag_at(text, 5) == ("dog", 4, 7)
+    assert tag_at(text, 4) == ("dog", 4, 7)
+    assert tag_at(text, 3) == ("cat", 0, 3)
+    assert tag_at(text, 99) == ("fox", 8, 11)
+
+
+def test_fetch_tag_suggestions_queries_autocomplete_without_credentials():
+    calls = []
+    payload = [
+        {"label": "cat_ears (207855)", "value": "cat_ears"},
+        {"label": "catalogue (12)", "value": "catalogue"},
+        {"label": "broken"},
+        {"label": "duplicate", "value": "cat_ears"},
+        "junk",
+    ]
+
+    names = fetch_tag_suggestions("cat", opener=_json_opener(payload, calls))
+
+    assert names == ["cat_ears", "catalogue"]
+    url = urllib.parse.urlsplit(calls[0])
+    assert url.path == "/autocomplete.php"
+    query = urllib.parse.parse_qs(url.query)
+    assert query == {"q": ["cat"]}
+
+
+def test_fetch_tag_suggestions_respects_limit():
+    payload = [{"value": f"tag{i}"} for i in range(20)]
+
+    names = fetch_tag_suggestions("ta", limit=3, opener=_json_opener(payload))
+
+    assert names == ["tag0", "tag1", "tag2"]
+
+
+def test_fetch_tag_suggestions_skips_short_or_namespaced_prefix():
+    def unused(request, timeout=None):
+        raise AssertionError("no request expected")
+
+    assert fetch_tag_suggestions("c", opener=unused) == []
+    assert fetch_tag_suggestions("cat:xyz", opener=unused) == []
+
+
+def test_fetch_tag_suggestions_returns_empty_on_errors():
+    def failing(request, timeout=None):
+        raise OSError("no network")
+
+    assert fetch_tag_suggestions("cat", opener=failing) == []
+    assert fetch_tag_suggestions("cat", opener=_bytes_opener(b"not json")) == []
+    assert fetch_tag_suggestions("cat", opener=_json_opener({"bad": "shape"})) == []
+
+
+def test_collect_new_posts_multi_uses_each_line_last_id(monkeypatch):
+    requested = []
+
+    def fake_fetch(api_key, user_id, tags, webm, limit, *, opener=None):
+        requested.append((tags, limit))
+        if tags == "cat":
+            return [Post(10, "https://x/cat.png"), Post(4, "https://x/old.png")]
+        return [Post(20, "https://x/dog.png")]
+
+    monkeypatch.setattr(rule34, "fetch_posts", fake_fetch)
+    last_ids = {
+        query_signature("cat", False): 5,
+        query_signature("dog", False): 15,
+    }
+
+    posts, newest_ids = collect_new_posts_multi(
+        "key", "42", "cat\ndog", False, 3, last_ids
+    )
+
+    assert requested == [("cat", 3), ("dog", 3)]
+    assert [(post.id, post.group) for post in posts] == [(20, "dog"), (10, "cat")]
+    assert newest_ids == {
+        query_signature("cat", False): 10,
+        query_signature("dog", False): 20,
+    }
+
+
+def test_collect_new_posts_multi_advances_lines_before_dedupe(monkeypatch):
+    def fake_fetch(api_key, user_id, tags, webm, limit, *, opener=None):
+        if tags == "cat":
+            return [Post(12, "https://x/shared.png")]
+        return [Post(12, "https://x/shared.png"), Post(11, "https://x/b.png")]
+
+    monkeypatch.setattr(rule34, "fetch_posts", fake_fetch)
+
+    posts, newest_ids = collect_new_posts_multi(
+        "key", "42", "cat\ndog", False, 10, {}
+    )
+
+    # The first line owns a post that both lines returned.
+    assert [(post.id, post.group) for post in posts] == [(12, "cat"), (11, "dog")]
+    assert newest_ids[query_signature("cat", False)] == 12
+    assert newest_ids[query_signature("dog", False)] == 12
 
 
 def test_query_signature_ignores_order_and_spacing():
@@ -264,6 +372,31 @@ def test_download_and_import_only_downloads_selected(tmp_path, monkeypatch):
     assert result.imported == 1
     # Deselected posts are still marked as seen.
     assert result.newest_id == 5
+
+
+def test_download_and_import_groups_per_source_query(tmp_path, monkeypatch):
+    db = MediaDatabase(str(tmp_path / "db.json"))
+    posts = [
+        Post(3, "https://example.test/a.png", group="cat"),
+        Post(2, "https://example.test/b.png", group="dog"),
+        Post(1, "https://example.test/c.png"),
+    ]
+
+    def fake_download(post, folder, **kwargs):
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"rule34_{post.id}.png")
+        with open(path, "wb") as f:
+            f.write(f"image{post.id}".encode())
+        return path
+
+    monkeypatch.setattr(rule34, "download_post", fake_download)
+
+    result = download_and_import(
+        db, posts, folder=str(tmp_path), tags="cat\n  dog  "
+    )
+
+    assert result.imported == 3
+    assert {entry.group for entry in db.entries} == {"cat", "dog", "cat dog"}
 
 
 def test_fetch_and_import_records_failed_downloads(tmp_path, monkeypatch):

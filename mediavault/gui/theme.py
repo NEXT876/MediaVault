@@ -159,7 +159,7 @@ QPushButton[nav="true"]:checked {
     color: $primary;
 }
 
-QLineEdit, QTextEdit, QComboBox {
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     background-color: $input_bg;
     border: 1px solid $border;
     border-radius: 8px;
@@ -167,7 +167,9 @@ QLineEdit, QTextEdit, QComboBox {
     selection-background-color: $primary;
     selection-color: $primary_text;
 }
-QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border-color: $primary; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+    border-color: $primary;
+}
 QComboBox { padding-right: 24px; }
 QComboBox QAbstractItemView {
     background-color: $surface;

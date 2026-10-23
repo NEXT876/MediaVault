@@ -15,10 +15,12 @@ from mediavault.importer import import_paths
 from mediavault.models import MediaDatabase
 
 API_URL = "https://api.rule34.xxx/index.php"
+AUTOCOMPLETE_URL = "https://api.rule34.xxx/autocomplete.php"
 USER_AGENT = "MediaVault/1.0"
 VIDEO_EXTS = {".webm", ".mp4", ".m4v", ".mov", ".mkv", ".avi"}
 _MAX_LIMIT = 1000
 _CHUNK = 1024 * 1024
+_SUGGESTION_TIMEOUT = 5
 
 
 class Rule34Error(Exception):
@@ -32,6 +34,7 @@ class Post:
     id: int
     file_url: str
     preview_url: str = ""
+    group: str = ""
 
 
 @dataclass
@@ -56,6 +59,68 @@ def _clamp_limit(limit: int) -> int:
     except (TypeError, ValueError):
         number = 10
     return min(max(number, 1), _MAX_LIMIT)
+
+
+def split_queries(text: str) -> list[str]:
+    """Return one normalized query per non-empty, unique line."""
+    queries: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        query = _normalized_tags(line)
+        key = query.casefold()
+        if query and key not in seen:
+            seen.add(key)
+            queries.append(query)
+    return queries
+
+
+def tag_at(text: str, position: int) -> tuple[str, int, int]:
+    """Return the whitespace-delimited tag around a cursor position."""
+    position = min(max(position, 0), len(text))
+    start = position
+    while start > 0 and not text[start - 1].isspace():
+        start -= 1
+    end = position
+    while end < len(text) and not text[end].isspace():
+        end += 1
+    return text[start:end], start, end
+
+
+def fetch_tag_suggestions(
+    prefix: str,
+    *,
+    limit: int = 10,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> list[str]:
+    """Return existing tag names that start with ``prefix``.
+
+    Uses the public autocomplete endpoint, so no credentials are needed.
+    Failures are silent because suggestions are optional.
+    """
+    prefix = prefix.strip()
+    if len(prefix) < 2 or ":" in prefix:
+        return []
+    params = urllib.parse.urlencode({"q": prefix})
+    request = urllib.request.Request(
+        f"{AUTOCOMPLETE_URL}?{params}",
+        headers={"User-Agent": USER_AGENT},
+    )
+    try:
+        with opener(request, timeout=_SUGGESTION_TIMEOUT) as response:
+            payload = json.load(response)
+    except (OSError, ValueError, http.client.HTTPException):
+        return []
+    if not isinstance(payload, list):
+        return []
+
+    names: list[str] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("value") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names[: _clamp_limit(limit)]
 
 
 def query_signature(tags: str, webm: bool) -> str:
@@ -174,6 +239,43 @@ def collect_new_posts(
     )
 
 
+def collect_new_posts_multi(
+    api_key: str,
+    user_id: str,
+    tags: str,
+    webm: bool,
+    limit: int,
+    last_ids: Mapping[str, int],
+    *,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> tuple[list[Post], dict[str, int]]:
+    """Fetch new posts for every query line.
+
+    Returns the posts (deduplicated across lines, newest first) and the newest
+    post ID per line signature. IDs are recorded before deduplication so every
+    line advances even when another line already supplied the same post.
+    """
+    posts: dict[int, Post] = {}
+    newest_ids: dict[str, int] = {}
+    for query in split_queries(tags):
+        signature = query_signature(query, webm)
+        fresh = collect_new_posts(
+            api_key,
+            user_id,
+            query,
+            webm,
+            limit,
+            last_ids.get(signature, 0),
+            opener=opener,
+        )
+        if fresh:
+            newest_ids[signature] = max(post.id for post in fresh)
+        for post in fresh:
+            post.group = query
+            posts.setdefault(post.id, post)
+    return sorted(posts.values(), key=lambda post: post.id, reverse=True), newest_ids
+
+
 def fetch_preview(
     url: str, *, opener: Callable[..., Any] = urllib.request.urlopen
 ) -> bytes | None:
@@ -258,7 +360,8 @@ def download_and_import(
 
     result.newest_id = max(post.id for post in posts)
     destination = download_dir(folder)
-    paths: dict[str, list[str]] = {"Bilder": [], "Videos": []}
+    fallback_group = _normalized_tags(tags)
+    paths: dict[tuple[str, str], list[str]] = {}
     for post in posts:
         if selected_ids is not None and post.id not in selected_ids:
             continue
@@ -270,12 +373,10 @@ def download_and_import(
             result.failed.append(f"Post {post.id}: {detail}")
             continue
         media_type = "Videos" if _is_video(path) else "Bilder"
-        paths[media_type].append(path)
+        key = (post.group or fallback_group, media_type)
+        paths.setdefault(key, []).append(path)
 
-    group = tags.strip()
-    for media_type, type_paths in paths.items():
-        if not type_paths:
-            continue
+    for (group, media_type), type_paths in paths.items():
         imported = import_paths(
             db,
             type_paths,

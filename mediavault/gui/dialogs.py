@@ -7,8 +7,8 @@ from collections.abc import Callable
 from html import escape
 from typing import Any
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, QThread, QTimer
+from PyQt6.QtGui import QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -40,7 +41,7 @@ from mediavault.config import (
 from mediavault.gui.widgets import rounded_pixmap
 from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem
-from mediavault.rule34 import Post
+from mediavault.rule34 import Post, fetch_tag_suggestions, split_queries, tag_at
 from mediavault.utils import OSHelper
 
 
@@ -49,6 +50,24 @@ def _field_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("FieldLabel")
     return label
+
+
+class Worker(QThread):
+    """Run one blocking call outside the GUI thread."""
+
+    def __init__(self, parent: QWidget, fn: Callable[..., Any], **kwargs: Any) -> None:
+        super().__init__(parent)
+        self._fn = fn
+        self._kwargs = kwargs
+        self.result: Any = None
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        """Run the call and store its outcome for the GUI thread."""
+        try:
+            self.result = self._fn(**self._kwargs)
+        except Exception as exc:  # noqa: BLE001 - reported in the GUI thread
+            self.error = exc
 
 
 class DetailDialog(QDialog):
@@ -614,6 +633,10 @@ class Rule34Dialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("rule34.xxx Import")
         self.setMinimumWidth(480)
+        self._suggest_worker: Worker | None = None
+        self._suggest_word = ""
+        self._suggest_range = (0, 0)
+        self._suggest_pending = False
         self._build_ui(config)
 
     def _build_ui(self, config: VaultConfig) -> None:
@@ -639,10 +662,28 @@ class Rule34Dialog(QDialog):
         self.inp_user = QLineEdit(config.rule34_user_id)
         layout.addWidget(self.inp_user)
 
-        layout.addWidget(_field_label("Tags / Charaktere"))
-        self.inp_tags = QLineEdit(config.rule34_tags)
-        self.inp_tags.setPlaceholderText("z. B. character_name other_tag")
+        layout.addWidget(_field_label("Tags / Charaktere (eine Suche pro Zeile)"))
+        self.inp_tags = QPlainTextEdit(config.rule34_tags)
+        self.inp_tags.setPlaceholderText(
+            "z. B. character_name other_tag\noder eine Suche pro Zeile"
+        )
+        self.inp_tags.setFixedHeight(90)
+        self.inp_tags.setTabChangesFocus(True)
+        self.inp_tags.textChanged.connect(self._schedule_suggestions)
+        self.inp_tags.cursorPositionChanged.connect(self._schedule_suggestions)
         layout.addWidget(self.inp_tags)
+
+        self.lst_tags = QListWidget()
+        self.lst_tags.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.lst_tags.setMaximumHeight(110)
+        self.lst_tags.setVisible(False)
+        self.lst_tags.itemClicked.connect(self._apply_suggestion)
+        layout.addWidget(self.lst_tags)
+
+        self._suggest_timer = QTimer(self)
+        self._suggest_timer.setSingleShot(True)
+        self._suggest_timer.setInterval(350)
+        self._suggest_timer.timeout.connect(self._request_suggestions)
 
         layout.addWidget(_field_label("Anzahl der neuesten Posts"))
         self.spin_count = QSpinBox()
@@ -665,7 +706,7 @@ class Rule34Dialog(QDialog):
             "Key und User-ID stehen unter rule34.xxx → Account options → "
             "API Access Credentials; du kannst beide auch zusammen in das "
             "obere Feld einfügen. Beides wird im Klartext in configs.json "
-            "gespeichert. "
+            "gespeichert. Eine Suche pro Zeile; die Anzahl gilt pro Zeile. "
             "Eigene sort:-Tags werden ignoriert; die neuesten IDs kommen zuerst."
         )
         hint.setObjectName("MutedLabel")
@@ -693,6 +734,76 @@ class Rule34Dialog(QDialog):
         if values.get("user_id"):
             self.inp_user.setText(values["user_id"][0])
 
+    def _schedule_suggestions(self) -> None:
+        """Restart the debounce timer for tag suggestions."""
+        self._suggest_timer.start()
+
+    def _request_suggestions(self) -> None:
+        """Ask rule34 for tags matching the word at the cursor."""
+        if self._suggest_worker is not None:
+            self._suggest_pending = True
+            return
+        word, start, end = tag_at(
+            self.inp_tags.toPlainText(), self.inp_tags.textCursor().position()
+        )
+        if len(word) < 2 or ":" in word:
+            self._hide_suggestions()
+            return
+        self._suggest_word = word
+        self._suggest_range = (start, end)
+        self._suggest_worker = Worker(self, fetch_tag_suggestions, prefix=word)
+        self._suggest_worker.finished.connect(self._on_suggestions)
+        self._suggest_worker.start()
+
+    def _on_suggestions(self) -> None:
+        """Show suggestions if the requested word is still current."""
+        worker = self._suggest_worker
+        self._suggest_worker = None
+        if worker is not None:
+            names = worker.result if worker.error is None else []
+            start, end = self._suggest_range
+            if names and self.inp_tags.toPlainText()[start:end] == self._suggest_word:
+                self._show_suggestions(names)
+            else:
+                self._hide_suggestions()
+        if self._suggest_pending:
+            self._suggest_pending = False
+            self._suggest_timer.start()
+
+    def _show_suggestions(self, names: list[str]) -> None:
+        """Fill and show the suggestion list."""
+        self.lst_tags.clear()
+        self.lst_tags.addItems(names)
+        self.lst_tags.setVisible(True)
+
+    def _hide_suggestions(self) -> None:
+        """Hide and empty the suggestion list."""
+        self.lst_tags.clear()
+        self.lst_tags.setVisible(False)
+
+    def _apply_suggestion(self, item: QListWidgetItem) -> None:
+        """Replace the current word with the clicked suggestion."""
+        start, end = self._suggest_range
+        if self.inp_tags.toPlainText()[start:end] != self._suggest_word:
+            self._hide_suggestions()
+            return
+        cursor = self.inp_tags.textCursor()
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(item.text() + " ")
+        self.inp_tags.setTextCursor(cursor)
+        self._hide_suggestions()
+
+    def done(self, result: int) -> None:
+        """Stop the suggestion timer and worker before the dialog closes."""
+        self._suggest_timer.stop()
+        worker = self._suggest_worker
+        self._suggest_worker = None
+        if worker is not None:
+            worker.finished.disconnect(self._on_suggestions)
+            worker.wait(6000)
+        super().done(result)
+
     def _accept(self) -> None:
         """Validate the required fields before closing."""
         if not self.inp_key.text().strip():
@@ -701,7 +812,7 @@ class Rule34Dialog(QDialog):
         if not self.inp_user.text().strip():
             QMessageBox.warning(self, "Fehler", "User-ID ist erforderlich.")
             return
-        if not self.inp_tags.text().strip():
+        if not split_queries(self.inp_tags.toPlainText()):
             QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
             return
         self.accept()
@@ -711,7 +822,7 @@ class Rule34Dialog(QDialog):
         return {
             "rule34_api_key": self.inp_key.text().strip(),
             "rule34_user_id": self.inp_user.text().strip(),
-            "rule34_tags": " ".join(self.inp_tags.text().split()),
+            "rule34_tags": "\n".join(split_queries(self.inp_tags.toPlainText())),
             "rule34_count": self.spin_count.value(),
             "rule34_webm": self.chk_webm.isChecked(),
         }
@@ -798,6 +909,7 @@ class Rule34PreviewDialog(QDialog):
 
         box = QCheckBox(f"#{post.id}")
         box.setChecked(True)
+        box.setToolTip(post.group)
         self._boxes[post.id] = box
 
         item = QWidget()
