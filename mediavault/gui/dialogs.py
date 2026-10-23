@@ -7,8 +7,8 @@ from collections.abc import Callable
 from html import escape
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, QTimer
-from PyQt6.QtGui import QPixmap, QTextCursor
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer
+from PyQt6.QtGui import QIcon, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -553,7 +553,9 @@ class ConfigDialog(QDialog):
         folder_row = QHBoxLayout()
         folder_row.setSpacing(8)
         self.inp_folder = QLineEdit()
-        self.inp_folder.setPlaceholderText("Ordner (optional) – beim Start scannen")
+        self.inp_folder.setPlaceholderText(
+            "Ordner (optional) – beim Start oder per Knopf scannen"
+        )
         folder_row.addWidget(self.inp_folder)
         btn_folder = QPushButton("Ordner wählen…")
         btn_folder.setProperty("variant", "secondary")
@@ -929,6 +931,57 @@ class Rule34PreviewDialog(QDialog):
     def selected_ids(self) -> set[int]:
         """Return the IDs of the checked posts."""
         return {post_id for post_id, box in self._boxes.items() if box.isChecked()}
+
+
+class FolderPreviewDialog(QDialog):
+    """Show images found in the config folder before they are imported."""
+
+    THUMB = 96
+
+    def __init__(self, parent: QWidget | None, paths: list[str]) -> None:
+        """Initialize the thumbnail grid from the found image paths."""
+        super().__init__(parent)
+        self.setWindowTitle("Neue Bilder importieren")
+        self.resize(760, 600)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        heading = QLabel(f"{len(paths)} neue Bild(er) gefunden")
+        heading.setObjectName("DialogTitle")
+        layout.addWidget(heading)
+
+        hint = QLabel("Nur Bilder mit KI-Metadaten werden übernommen.")
+        hint.setObjectName("HintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.list_files = QListWidget()
+        self.list_files.setViewMode(QListWidget.ViewMode.IconMode)
+        self.list_files.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.list_files.setMovement(QListWidget.Movement.Static)
+        self.list_files.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.list_files.setWordWrap(True)
+        self.list_files.setIconSize(QSize(self.THUMB, self.THUMB))
+        self.list_files.setGridSize(QSize(self.THUMB + 30, self.THUMB + 44))
+        for path in paths:
+            item = QListWidgetItem(QIcon(path), os.path.basename(path))
+            item.setToolTip(path)
+            self.list_files.addItem(item)
+        layout.addWidget(self.list_files, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        btn_import = QPushButton(f"{len(paths)} importieren")
+        btn_import.setProperty("variant", "primary")
+        btn_import.clicked.connect(self.accept)
+        buttons.addWidget(btn_cancel)
+        buttons.addWidget(btn_import)
+        layout.addLayout(buttons)
 
 
 class AnalysisDialog(QDialog):

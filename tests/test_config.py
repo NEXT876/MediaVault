@@ -127,6 +127,19 @@ def test_find_new_images_missing_folder_returns_empty(tmp_path):
     assert find_new_images(str(tmp_path / "nope"), []) == []
 
 
+def test_folder_last_sync_defaults_and_round_trips(tmp_path):
+    path = tmp_path / "configs.json"
+    assert VaultConfig.from_dict({"name": "Alt"}).folder_last_sync == ""
+
+    config = VaultConfig(
+        name="KI", mode=MODE_AI, db_path="ki.json", folder_last_sync="23.10.2026 14:05"
+    )
+    save_configs([config], config.db_path, str(path))
+    loaded, _last = load_configs(str(path))
+
+    assert loaded[0].folder_last_sync == "23.10.2026 14:05"
+
+
 def test_rule34_settings_default_for_old_config():
     config = VaultConfig.from_dict({"name": "Alt"})
 

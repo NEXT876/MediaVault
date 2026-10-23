@@ -63,7 +63,7 @@ def main() -> None:
     window = MainWindow(theme)
 
     def _scan_after_show() -> None:
-        window.scan_folder()
+        window.auto_scan_folder()
         window.refresh_data()
 
     # Keep the splash visible for at least 1.2 s so it does not just flash.

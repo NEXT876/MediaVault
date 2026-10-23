@@ -33,6 +33,8 @@ class VaultConfig:
     rule34_count: int = 10
     rule34_webm: bool = False
     rule34_last_ids: dict[str, int] = field(default_factory=dict)
+    # Appended last so existing positional construction keeps working.
+    folder_last_sync: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
@@ -49,6 +51,7 @@ class VaultConfig:
             rule34_count=_int_setting(data.get("rule34_count"), 10, 1, 1000),
             rule34_webm=_bool_setting(data.get("rule34_webm")),
             rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
+            folder_last_sync=str(data.get("folder_last_sync") or ""),
         )
 
 

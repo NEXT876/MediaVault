@@ -1,7 +1,9 @@
 """Main window of MediaVault."""
 
 import logging
+import os
 from collections.abc import Callable, Iterable
+from datetime import datetime
 from typing import Any
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
@@ -38,6 +40,7 @@ from mediavault.gui.dialogs import (
     ConfigDialog,
     DetailDialog,
     EditDialog,
+    FolderPreviewDialog,
     GroupRandomDialog,
     Rule34Dialog,
     Rule34PreviewDialog,
@@ -190,6 +193,16 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self.lbl_analysis_section)
         self.btn_analysis = self._create_side_btn("📊  Analyse", self._open_analysis)
         side_layout.addWidget(self.btn_analysis)
+        self.btn_sync_folder = self._create_side_btn(
+            "🔄  Ordner synchronisieren", self._sync_folder
+        )
+        self.btn_sync_folder.setToolTip("Ordner jetzt nach neuen Bildern durchsuchen")
+        side_layout.addWidget(self.btn_sync_folder)
+        self.lbl_last_sync = QLabel("")
+        self.lbl_last_sync.setObjectName("HintLabel")
+        self.lbl_last_sync.setWordWrap(True)
+        self.lbl_last_sync.setContentsMargins(4, 0, 0, 0)
+        side_layout.addWidget(self.lbl_last_sync)
 
         side_layout.addWidget(self._create_section_label("ZUFALL (LOKAL)"))
         side_layout.addWidget(
@@ -388,6 +401,9 @@ class MainWindow(QMainWindow):
         self.btn_videos.setVisible(not ai)
         self.lbl_analysis_section.setVisible(ai)
         self.btn_analysis.setVisible(ai)
+        self.btn_sync_folder.setVisible(ai)
+        self.lbl_last_sync.setVisible(ai)
+        self._update_last_sync_label()
         self.lbl_rule34_section.setVisible(not ai)
         self.btn_rule34.setVisible(not ai)
         self.current_view = "Bilder"
@@ -413,6 +429,114 @@ class MainWindow(QMainWindow):
         import_paths(
             self.db, paths, type_str="Bilder", group="", mode=self.config.mode
         )
+
+    def auto_scan_folder(self) -> None:
+        """Scan the folder on startup unless the config is in AI mode.
+
+        AI mode extracts metadata from every file, so it only syncs when the
+        user asks for it.
+        """
+        if self.config.mode != MODE_AI:
+            self.scan_folder()
+
+    def _update_last_sync_label(self) -> None:
+        """Show when the config's folder was last synchronized."""
+        stamp = self.config.folder_last_sync
+        self.lbl_last_sync.setText(
+            f"Zuletzt synchronisiert: {stamp}"
+            if stamp
+            else "Noch nicht synchronisiert"
+        )
+
+    def _sync_folder(self) -> None:
+        """Scan the config folder in the background and preview new images."""
+        folder = self.config.folder.strip()
+        if not folder:
+            QMessageBox.information(
+                self,
+                "Ordner synchronisieren",
+                "Für diese Config ist kein Ordner hinterlegt.",
+            )
+            return
+        if not os.path.isdir(folder):
+            QMessageBox.warning(
+                self, "Ordner synchronisieren", "Der Ordner wurde nicht gefunden."
+            )
+            return
+        known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
+        self.btn_sync_folder.setEnabled(False)
+        worker = Worker(
+            self,
+            find_new_images,
+            folder=folder,
+            known_paths=known,
+            extensions={".png"},
+        )
+        progress = self._busy_progress("Durchsuche Ordner nach neuen Bildern …")
+        worker.finished.connect(lambda: self._show_new_images(worker, progress))
+        worker.start()
+        progress.show()
+
+    def _show_new_images(self, worker: Worker, progress: QProgressDialog) -> None:
+        """Preview newly found images and import them after confirmation."""
+        progress.close()
+        progress.deleteLater()
+        worker.deleteLater()
+        self.btn_sync_folder.setEnabled(True)
+        if worker.error is not None:
+            QMessageBox.warning(self, "Ordner synchronisieren", str(worker.error))
+            return
+        paths = [path for path in worker.result if os.path.isfile(path)]
+        if not paths:
+            self._mark_folder_synced()
+            QMessageBox.information(
+                self, "Ordner synchronisieren", "Keine neuen Bilder gefunden."
+            )
+            return
+        if not FolderPreviewDialog(self, paths).exec():
+            return
+        importer = Worker(
+            self,
+            import_paths,
+            db=self.db,
+            paths=paths,
+            type_str="Bilder",
+            group="",
+            mode=self.config.mode,
+        )
+        progress = self._busy_progress(f"Importiere {len(paths)} Bild(er) …")
+        importer.finished.connect(
+            lambda: self._apply_folder_sync(importer, progress)
+        )
+        importer.start()
+        progress.show()
+
+    def _apply_folder_sync(
+        self, worker: Worker, progress: QProgressDialog
+    ) -> None:
+        """Report the finished folder import and record the sync time."""
+        progress.close()
+        progress.deleteLater()
+        worker.deleteLater()
+        if worker.error is not None:
+            QMessageBox.warning(self, "Ordner synchronisieren", str(worker.error))
+            return
+        result = worker.result
+        if result is None:
+            return
+        self._mark_folder_synced()
+        if result.added:
+            self.refresh_data()
+        summary = f"{result.added} importiert, {result.duplicates} Duplikate"
+        if result.skipped_no_ai:
+            summary += f", {result.skipped_no_ai} ohne KI-Metadaten übersprungen"
+        QMessageBox.information(self, "Ordner synchronisieren", summary)
+
+    def _mark_folder_synced(self) -> None:
+        """Store and display the time of the last completed folder sync."""
+        self.config.folder_last_sync = datetime.now().strftime("%d.%m.%Y %H:%M")
+        save_configs(self.configs, self.config.db_path)
+        self._update_last_sync_label()
 
     def _fetch_rule34(self) -> None:
         """Fetch new rule34 posts and show them for selection."""
@@ -440,7 +564,7 @@ class MainWindow(QMainWindow):
             limit=self.config.rule34_count,
             last_ids=last_ids,
         )
-        progress = self._rule34_progress("Lade Posts von rule34 …")
+        progress = self._busy_progress("Lade Posts von rule34 …")
         worker.finished.connect(lambda: self._show_rule34_preview(worker, progress))
         worker.start()
         progress.show()
@@ -466,8 +590,8 @@ class MainWindow(QMainWindow):
                 previews[post.id] = data
         return posts, previews, newest_ids
 
-    def _rule34_progress(self, text: str) -> QProgressDialog:
-        """Create a modal busy dialog for one rule34 step."""
+    def _busy_progress(self, text: str) -> QProgressDialog:
+        """Create a modal busy dialog for one background step."""
         progress = QProgressDialog(text, "", 0, 0, self)
         progress.setCancelButton(None)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -504,7 +628,7 @@ class MainWindow(QMainWindow):
             tags=self.config.rule34_tags,
             selected_ids=selected,
         )
-        progress = self._rule34_progress("Lade ausgewählte Posts …")
+        progress = self._busy_progress("Lade ausgewählte Posts …")
         importer.finished.connect(
             lambda: self._apply_rule34_result(importer, newest_ids, progress)
         )
@@ -896,7 +1020,7 @@ class MainWindow(QMainWindow):
         self._apply_selection(set())
         self._anchor_entry = None
         self._apply_config_ui()
-        self.scan_folder()
+        self.auto_scan_folder()
         self.refresh_data()
 
     def _open_analysis(self) -> None:
