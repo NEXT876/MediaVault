@@ -84,10 +84,7 @@ class MediaCard(QFrame):
         self.img_lbl.setFixedSize(IMAGE_SIZE, IMAGE_SIZE)
         self.img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        if pixmap and not pixmap.isNull():
-            self.img_lbl.setPixmap(rounded_pixmap(pixmap))
-        else:
-            self.img_lbl.setText("Kein Vorschaubild")
+        self.set_pixmap(pixmap)
         layout.addWidget(self.img_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.title_lbl = QLabel()
@@ -144,6 +141,13 @@ class MediaCard(QFrame):
         self.selection_badge.move(12, 12)
         self.selection_badge.hide()
         self.selection_badge.raise_()
+
+    def set_pixmap(self, pixmap: QPixmap | None) -> None:
+        """Show a preview, or the placeholder when there is none."""
+        if pixmap and not pixmap.isNull():
+            self.img_lbl.setPixmap(rounded_pixmap(pixmap))
+        else:
+            self.img_lbl.setText("Kein Vorschaubild")
 
     def set_selected(self, selected: bool) -> None:
         """Highlight the card when it is part of the selection."""

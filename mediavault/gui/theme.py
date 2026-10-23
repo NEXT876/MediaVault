@@ -260,6 +260,20 @@ QLabel#DialogImage {
     color: $text_muted;
 }
 
+QFrame#DownloadRow {
+    background-color: $surface;
+    border: 1px solid $border;
+    border-radius: 10px;
+}
+QLabel#DownloadIcon, QLabel#DownloadTitle { background: transparent; }
+QLabel#DownloadTitle { font-weight: 700; }
+QProgressBar {
+    background-color: $surface_alt;
+    border: none;
+    border-radius: 3px;
+}
+QProgressBar::chunk { background-color: $primary; border-radius: 3px; }
+
 QRubberBand {
     background-color: $selection_fill;
     border: 1px solid $primary;

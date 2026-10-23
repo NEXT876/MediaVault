@@ -392,6 +392,36 @@ def test_download_and_import_only_downloads_selected(tmp_path, monkeypatch):
     assert result.newest_id == 5
 
 
+def test_download_and_import_reports_progress_after_each_file(tmp_path, monkeypatch):
+    db = MediaDatabase(str(tmp_path / "db.json"))
+    posts = [
+        Post(2, "https://example.test/a.png"),
+        Post(1, "https://example.test/b.png"),
+    ]
+    events = []
+
+    def fake_download(post, folder, **kwargs):
+        events.append(f"file{post.id}")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"rule34_{post.id}.png")
+        with open(path, "wb") as f:
+            f.write(b"image")
+        return path
+
+    monkeypatch.setattr(rule34, "download_post", fake_download)
+
+    download_and_import(
+        db,
+        posts,
+        folder=str(tmp_path),
+        tags="cat",
+        selected_ids={1, 2},
+        progress=lambda done, total: events.append(f"done{done}of{total}"),
+    )
+
+    assert events == ["file2", "done1of2", "file1", "done2of2"]
+
+
 def test_download_and_import_groups_per_source_query(tmp_path, monkeypatch):
     db = MediaDatabase(str(tmp_path / "db.json"))
     posts = [

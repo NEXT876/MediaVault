@@ -353,11 +353,13 @@ def download_and_import(
     tags: str,
     selected_ids: set[int] | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
+    progress: Callable[[int, int], None] | None = None,
 ) -> Rule34Result:
     """Download and import ``posts``, optionally only those in ``selected_ids``.
 
     ``newest_id`` covers all fetched posts, so deselected posts are not shown
-    again on the next run.
+    again on the next run. ``progress`` is called with the number of finished
+    files and the total after each file, successful or not.
     """
     result = Rule34Result()
     if not posts:
@@ -367,19 +369,24 @@ def download_and_import(
     destination = download_dir(folder)
     fallback_group = _normalized_tags(tags)
     paths: dict[tuple[str, str], list[str]] = {}
-    for post in posts:
-        if selected_ids is not None and post.id not in selected_ids:
-            continue
+    targets = [
+        post
+        for post in posts
+        if selected_ids is None or post.id in selected_ids
+    ]
+    for number, post in enumerate(targets, 1):
         try:
             path = download_post(post, destination, opener=opener)
         except (OSError, ValueError, http.client.HTTPException, Rule34Error) as exc:
             # One broken download must not abort the rest of the run.
             detail = str(exc) if isinstance(exc, Rule34Error) else type(exc).__name__
             result.failed.append(f"Post {post.id}: {detail}")
-            continue
-        media_type = "Videos" if _is_video(path) else "Bilder"
-        key = (post.group or fallback_group, media_type)
-        paths.setdefault(key, []).append(path)
+        else:
+            media_type = "Videos" if _is_video(path) else "Bilder"
+            key = (post.group or fallback_group, media_type)
+            paths.setdefault(key, []).append(path)
+        if progress is not None:
+            progress(number, len(targets))
 
     for (group, media_type), type_paths in paths.items():
         imported = import_paths(

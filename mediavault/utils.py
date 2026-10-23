@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QDesktopServices, QImage, QPixmap
+from PyQt6.QtGui import QDesktopServices, QImage
 from PyQt6.QtWidgets import QFileDialog, QWidget
 
 logger = logging.getLogger(__name__)
@@ -144,8 +144,12 @@ class OSHelper:
         return ""
 
     @staticmethod
-    def get_video_frame_pixmap(video_path: str) -> QPixmap | None:
-        """Extract a video frame as a QPixmap via OpenCV."""
+    def get_video_frame_image(video_path: str) -> QImage | None:
+        """Extract a video frame as a QImage via OpenCV.
+
+        QImage may be created in a worker thread; callers convert it to a
+        QPixmap in the GUI thread.
+        """
         if not HAS_CV2 or not video_path:
             return None
         try:
@@ -160,14 +164,14 @@ class OSHelper:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = frame_rgb.shape
                 bytes_per_line = ch * w
-                qimg = QImage(
+                # copy(): the image must not keep pointing at the numpy buffer.
+                return QImage(
                     frame_rgb.data,
                     w,
                     h,
                     bytes_per_line,
                     QImage.Format.Format_RGB888,
-                )
-                return QPixmap.fromImage(qimg)
+                ).copy()
         except cv2.error:
             logger.debug("Videoframe konnte nicht extrahiert werden", exc_info=True)
         return None
