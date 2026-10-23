@@ -2,6 +2,7 @@
 
 import os
 import time
+import urllib.parse
 from collections.abc import Callable
 from html import escape
 from typing import Any
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,6 +23,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -37,6 +40,7 @@ from mediavault.config import (
 from mediavault.gui.widgets import rounded_pixmap
 from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem
+from mediavault.rule34 import Post
 from mediavault.utils import OSHelper
 
 
@@ -600,6 +604,210 @@ class ConfigDialog(QDialog):
         save_configs(self.configs, config.db_path)
         self.selected_config = config
         self.accept()
+
+
+class Rule34Dialog(QDialog):
+    """Collect rule34 credentials and search settings for the active config."""
+
+    def __init__(self, parent: QWidget | None, config: VaultConfig) -> None:
+        """Initialize the form from the config's saved values."""
+        super().__init__(parent)
+        self.setWindowTitle("rule34.xxx Import")
+        self.setMinimumWidth(480)
+        self._build_ui(config)
+
+    def _build_ui(self, config: VaultConfig) -> None:
+        """Build the credential, tag and download settings form."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(8)
+
+        layout.addWidget(_field_label("Zugangsdaten einfügen"))
+        self.inp_credentials = QLineEdit()
+        self.inp_credentials.setPlaceholderText(
+            "&api_key=…&user_id=… oder komplette URL einfügen"
+        )
+        self.inp_credentials.textChanged.connect(self._apply_credentials)
+        layout.addWidget(self.inp_credentials)
+
+        layout.addWidget(_field_label("API-Key"))
+        self.inp_key = QLineEdit(config.rule34_api_key)
+        self.inp_key.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.inp_key)
+
+        layout.addWidget(_field_label("User-ID"))
+        self.inp_user = QLineEdit(config.rule34_user_id)
+        layout.addWidget(self.inp_user)
+
+        layout.addWidget(_field_label("Tags / Charaktere"))
+        self.inp_tags = QLineEdit(config.rule34_tags)
+        self.inp_tags.setPlaceholderText("z. B. character_name other_tag")
+        layout.addWidget(self.inp_tags)
+
+        layout.addWidget(_field_label("Anzahl der neuesten Posts"))
+        self.spin_count = QSpinBox()
+        self.spin_count.setRange(1, 200)
+        self.spin_count.setValue(config.rule34_count)
+        layout.addWidget(self.spin_count)
+
+        self.chk_webm = QCheckBox("Nur Videos (webm)")
+        self.chk_webm.setChecked(config.rule34_webm)
+        layout.addWidget(self.chk_webm)
+
+        hint = QLabel(
+            "Key und User-ID stehen unter rule34.xxx → Account options → "
+            "API Access Credentials; du kannst beide auch zusammen in das "
+            "obere Feld einfügen. Beides wird im Klartext in configs.json "
+            "gespeichert. "
+            "Eigene sort:-Tags werden ignoriert; die neuesten IDs kommen zuerst."
+        )
+        hint.setObjectName("MutedLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        btn_start = QPushButton("Importieren")
+        btn_start.setProperty("variant", "primary")
+        btn_start.clicked.connect(self._accept)
+        buttons.addWidget(btn_cancel)
+        buttons.addWidget(btn_start)
+        layout.addLayout(buttons)
+
+    def _apply_credentials(self, text: str) -> None:
+        """Fill key and user ID from a pasted parameter string or URL."""
+        query = urllib.parse.urlsplit(text.strip()).query or text.strip().lstrip("&")
+        values = urllib.parse.parse_qs(query)
+        if values.get("api_key"):
+            self.inp_key.setText(values["api_key"][0])
+        if values.get("user_id"):
+            self.inp_user.setText(values["user_id"][0])
+
+    def _accept(self) -> None:
+        """Validate the required fields before closing."""
+        if not self.inp_key.text().strip():
+            QMessageBox.warning(self, "Fehler", "API-Key ist erforderlich.")
+            return
+        if not self.inp_user.text().strip():
+            QMessageBox.warning(self, "Fehler", "User-ID ist erforderlich.")
+            return
+        if not self.inp_tags.text().strip():
+            QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
+            return
+        self.accept()
+
+    def settings(self) -> dict[str, Any]:
+        """Return the entered settings as config field values."""
+        return {
+            "rule34_api_key": self.inp_key.text().strip(),
+            "rule34_user_id": self.inp_user.text().strip(),
+            "rule34_tags": " ".join(self.inp_tags.text().split()),
+            "rule34_count": self.spin_count.value(),
+            "rule34_webm": self.chk_webm.isChecked(),
+        }
+
+
+class Rule34PreviewDialog(QDialog):
+    """Show fetched posts and let the user pick which ones to download."""
+
+    COLUMNS = 4
+    THUMB = 160
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        posts: list[Post],
+        previews: dict[int, bytes],
+    ) -> None:
+        """Initialize the preview grid from fetched posts and thumbnails."""
+        super().__init__(parent)
+        self.setWindowTitle("rule34.xxx – Posts auswählen")
+        self.resize(900, 700)
+        self._boxes: dict[int, QCheckBox] = {}
+        self._build_ui(posts, previews)
+
+    def _build_ui(self, posts: list[Post], previews: dict[int, bytes]) -> None:
+        """Build the selection toolbar, image grid and dialog buttons."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        btn_all = QPushButton("Alle auswählen")
+        btn_none = QPushButton("Keine")
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none.clicked.connect(lambda: self._set_all(False))
+        toolbar.addWidget(btn_all)
+        toolbar.addWidget(btn_none)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        grid = QGridLayout(content)
+        for index, post in enumerate(posts):
+            grid.addWidget(
+                self._item(post, previews.get(post.id)),
+                index // self.COLUMNS,
+                index % self.COLUMNS,
+            )
+        grid.setRowStretch(grid.rowCount(), 1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        btn_start = QPushButton("Auswahl importieren")
+        btn_start.setProperty("variant", "primary")
+        btn_start.clicked.connect(self.accept)
+        buttons.addWidget(btn_cancel)
+        buttons.addWidget(btn_start)
+        layout.addLayout(buttons)
+
+    def _item(self, post: Post, data: bytes | None) -> QWidget:
+        """Build one thumbnail with its selection checkbox."""
+        label = QLabel()
+        label.setFixedSize(self.THUMB, self.THUMB)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap()
+        if data and pixmap.loadFromData(data):
+            label.setPixmap(
+                pixmap.scaled(
+                    self.THUMB,
+                    self.THUMB,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        else:
+            label.setText("keine Vorschau")
+
+        box = QCheckBox(f"#{post.id}")
+        box.setChecked(True)
+        self._boxes[post.id] = box
+
+        item = QWidget()
+        column = QVBoxLayout(item)
+        column.setContentsMargins(4, 4, 4, 4)
+        column.addWidget(label)
+        column.addWidget(box)
+        return item
+
+    def _set_all(self, checked: bool) -> None:
+        """Check or uncheck every post."""
+        for box in self._boxes.values():
+            box.setChecked(checked)
+
+    def selected_ids(self) -> set[int]:
+        """Return the IDs of the checked posts."""
+        return {post_id for post_id, box in self._boxes.items() if box.isChecked()}
 
 
 class AnalysisDialog(QDialog):

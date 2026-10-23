@@ -110,3 +110,52 @@ def test_find_new_images_can_limit_to_png(tmp_path):
 
 def test_find_new_images_missing_folder_returns_empty(tmp_path):
     assert find_new_images(str(tmp_path / "nope"), []) == []
+
+
+def test_rule34_settings_default_for_old_config():
+    config = VaultConfig.from_dict({"name": "Alt"})
+
+    assert config.rule34_api_key == ""
+    assert config.rule34_user_id == ""
+    assert config.rule34_tags == ""
+    assert config.rule34_count == 10
+    assert config.rule34_webm is False
+    assert config.rule34_last_ids == {}
+
+
+def test_rule34_settings_round_trip(tmp_path):
+    path = tmp_path / "configs.json"
+    config = VaultConfig(
+        "A",
+        MODE_NORMAL,
+        "a.json",
+        "",
+        "key",
+        "42",
+        "cat dog",
+        25,
+        True,
+        {"cat dog|webm": 7},
+    )
+
+    save_configs([config], config.db_path, str(path))
+    loaded, _last = load_configs(str(path))
+
+    assert loaded == [config]
+
+
+def test_rule34_settings_are_coerced_from_stored_data():
+    config = VaultConfig.from_dict(
+        {
+            "name": "B",
+            "rule34_count": "9999",
+            "rule34_webm": "yes",
+            "rule34_last_ids": {"ok": 5, "negative": -1, "text": "nan", 3: 9},
+        }
+    )
+    invalid = VaultConfig.from_dict({"name": "C", "rule34_count": "viele"})
+
+    assert config.rule34_count == 1000
+    assert config.rule34_webm is True
+    assert config.rule34_last_ids == {"ok": 5}
+    assert invalid.rule34_count == 10

@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QThread, QTimer
 from PyQt6.QtGui import QKeyEvent, QKeySequence, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
     QApplication,
@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QRubberBand,
     QScrollArea,
@@ -25,23 +26,58 @@ from PyQt6.QtWidgets import (
 )
 
 from mediavault.ai_meta import extract_ai_metadata
-from mediavault.config import IMAGE_EXTS, MODE_AI, find_new_images, load_configs
+from mediavault.config import (
+    IMAGE_EXTS,
+    MODE_AI,
+    find_new_images,
+    load_configs,
+    save_configs,
+)
 from mediavault.gui.dialogs import (
     AnalysisDialog,
     ConfigDialog,
     DetailDialog,
     EditDialog,
     GroupRandomDialog,
+    Rule34Dialog,
+    Rule34PreviewDialog,
 )
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
 from mediavault.importer import find_duplicate, import_paths
 from mediavault.models import MediaDatabase, MediaItem
+from mediavault.rule34 import (
+    Post,
+    collect_new_posts,
+    download_and_import,
+    fetch_preview,
+    query_signature,
+)
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
 
 ALL_GROUPS = "Alle Gruppen"
+
+
+class _Rule34Worker(QThread):
+    """Run one blocking rule34 step outside the GUI thread."""
+
+    def __init__(
+        self, parent: QWidget, fn: Callable[..., Any], **kwargs: Any
+    ) -> None:
+        super().__init__(parent)
+        self._fn = fn
+        self._kwargs = kwargs
+        self.result: Any = None
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        """Run the step and store its outcome for the GUI thread."""
+        try:
+            self.result = self._fn(**self._kwargs)
+        except Exception as exc:  # noqa: BLE001 - reported in the GUI thread
+            self.error = exc
 
 
 def visible_entries(
@@ -196,6 +232,13 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(
             self._create_side_btn("📂  Aus Gruppen", self._open_group_random)
         )
+
+        self.lbl_rule34_section = self._create_section_label("ONLINE")
+        side_layout.addWidget(self.lbl_rule34_section)
+        self.btn_rule34 = self._create_side_btn(
+            "⬇️  rule34 Import", self._fetch_rule34
+        )
+        side_layout.addWidget(self.btn_rule34)
 
         side_layout.addStretch()
 
@@ -366,6 +409,8 @@ class MainWindow(QMainWindow):
         self.btn_videos.setVisible(not ai)
         self.lbl_analysis_section.setVisible(ai)
         self.btn_analysis.setVisible(ai)
+        self.lbl_rule34_section.setVisible(not ai)
+        self.btn_rule34.setVisible(not ai)
         self.current_view = "Bilder"
         self.btn_bilder.setChecked(True)
         self.lbl_view_title.setText("🖼️ Bilder")
@@ -389,6 +434,129 @@ class MainWindow(QMainWindow):
         import_paths(
             self.db, paths, type_str="Bilder", group="", mode=self.config.mode
         )
+
+    def _fetch_rule34(self) -> None:
+        """Fetch new rule34 posts and show them for selection."""
+        if self.config.mode == MODE_AI:
+            return
+        dlg = Rule34Dialog(self, self.config)
+        if not dlg.exec():
+            return
+        for key, value in dlg.settings().items():
+            setattr(self.config, key, value)
+        save_configs(self.configs, self.config.db_path)
+
+        signature = query_signature(
+            self.config.rule34_tags, self.config.rule34_webm
+        )
+        worker = _Rule34Worker(
+            self,
+            self._load_rule34_preview,
+            api_key=self.config.rule34_api_key,
+            user_id=self.config.rule34_user_id,
+            tags=self.config.rule34_tags,
+            webm=self.config.rule34_webm,
+            limit=self.config.rule34_count,
+            last_id=self.config.rule34_last_ids.get(signature, 0),
+        )
+        progress = self._rule34_progress("Lade Posts von rule34 …")
+        worker.finished.connect(
+            lambda: self._show_rule34_preview(worker, signature, progress)
+        )
+        worker.start()
+        progress.show()
+
+    def _load_rule34_preview(
+        self,
+        *,
+        api_key: str,
+        user_id: str,
+        tags: str,
+        webm: bool,
+        limit: int,
+        last_id: int,
+    ) -> tuple[list[Post], dict[int, bytes]]:
+        """Fetch new posts and their thumbnails for the selection dialog."""
+        posts = collect_new_posts(api_key, user_id, tags, webm, limit, last_id)
+        previews: dict[int, bytes] = {}
+        for post in posts:
+            data = fetch_preview(post.preview_url)
+            if data:
+                previews[post.id] = data
+        return posts, previews
+
+    def _rule34_progress(self, text: str) -> QProgressDialog:
+        """Create a modal busy dialog for one rule34 step."""
+        progress = QProgressDialog(text, "", 0, 0, self)
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        return progress
+
+    def _show_rule34_preview(
+        self, worker: _Rule34Worker, signature: str, progress: QProgressDialog
+    ) -> None:
+        """Open the selection dialog for the fetched posts."""
+        progress.close()
+        progress.deleteLater()
+        worker.deleteLater()
+        if worker.error is not None:
+            QMessageBox.warning(self, "rule34 Import", str(worker.error))
+            return
+        posts, previews = worker.result
+        if not posts:
+            QMessageBox.information(self, "rule34 Import", "Keine neuen Posts.")
+            return
+        dlg = Rule34PreviewDialog(self, posts, previews)
+        if not dlg.exec():
+            return
+        selected = dlg.selected_ids()
+        if not selected:
+            QMessageBox.information(self, "rule34 Import", "Keine Posts ausgewählt.")
+            return
+        importer = _Rule34Worker(
+            self,
+            download_and_import,
+            db=self.db,
+            posts=posts,
+            folder=self.config.folder,
+            tags=self.config.rule34_tags,
+            selected_ids=selected,
+        )
+        progress = self._rule34_progress("Lade ausgewählte Posts …")
+        importer.finished.connect(
+            lambda: self._apply_rule34_result(importer, signature, progress)
+        )
+        importer.start()
+        progress.show()
+
+    def _apply_rule34_result(
+        self, worker: _Rule34Worker, signature: str, progress: QProgressDialog
+    ) -> None:
+        """Report a finished rule34 import and store the newest post ID."""
+        progress.close()
+        progress.deleteLater()
+        worker.deleteLater()
+        if worker.error is not None:
+            QMessageBox.warning(self, "rule34 Import", str(worker.error))
+            return
+        result = worker.result
+        if result is None:
+            return
+        if result.imported:
+            self.refresh_data()
+        summary = f"{result.imported} importiert, {result.duplicates} Duplikate"
+        if result.failed:
+            QMessageBox.warning(
+                self,
+                "rule34 Import",
+                summary + "\n\nFehlgeschlagen:\n" + "\n".join(result.failed),
+            )
+            return
+        if result.newest_id:
+            self.config.rule34_last_ids[signature] = result.newest_id
+            save_configs(self.configs, self.config.db_path)
+        QMessageBox.information(self, "rule34 Import", summary)
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
         """Return an entry's preview pixmap, cached by its media path."""
