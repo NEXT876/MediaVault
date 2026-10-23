@@ -448,6 +448,13 @@ class MainWindow(QMainWindow):
         signature = query_signature(
             self.config.rule34_tags, self.config.rule34_webm
         )
+        # The reset option ignores the stored ID; the import still skips
+        # files that are already stored locally.
+        last_id = (
+            0
+            if dlg.chk_reset.isChecked()
+            else self.config.rule34_last_ids.get(signature, 0)
+        )
         worker = _Rule34Worker(
             self,
             self._load_rule34_preview,
@@ -456,7 +463,7 @@ class MainWindow(QMainWindow):
             tags=self.config.rule34_tags,
             webm=self.config.rule34_webm,
             limit=self.config.rule34_count,
-            last_id=self.config.rule34_last_ids.get(signature, 0),
+            last_id=last_id,
         )
         progress = self._rule34_progress("Lade Posts von rule34 …")
         worker.finished.connect(

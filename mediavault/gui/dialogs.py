@@ -654,6 +654,13 @@ class Rule34Dialog(QDialog):
         self.chk_webm.setChecked(config.rule34_webm)
         layout.addWidget(self.chk_webm)
 
+        self.chk_reset = QCheckBox("Cache zurücksetzen (neueste Posts erneut holen)")
+        self.chk_reset.setToolTip(
+            "Ignoriert die zuletzt importierte ID. Bereits vorhandene Dateien "
+            "werden trotzdem übersprungen."
+        )
+        layout.addWidget(self.chk_reset)
+
         hint = QLabel(
             "Key und User-ID stehen unter rule34.xxx → Account options → "
             "API Access Credentials; du kannst beide auch zusammen in das "
