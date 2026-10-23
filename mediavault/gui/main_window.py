@@ -48,7 +48,7 @@ from mediavault.gui.dialogs import (
 )
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
-from mediavault.importer import find_duplicate, import_paths
+from mediavault.importer import find_duplicate, import_paths, norm_path
 from mediavault.models import MediaDatabase, MediaItem
 from mediavault.rule34 import (
     Post,
@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         self._last_drag_global: QPoint | None = None
         self._rubber_band: QRubberBand | None = None
         self._autoscroll_direction = 0
+        # Paths the last folder sync could not import; hidden from later syncs.
+        self._sync_ignored: set[str] = set()
 
         self._autoscroll_timer = QTimer(self)
         self._autoscroll_timer.setInterval(40)
@@ -401,8 +403,9 @@ class MainWindow(QMainWindow):
         self.btn_videos.setVisible(not ai)
         self.lbl_analysis_section.setVisible(ai)
         self.btn_analysis.setVisible(ai)
-        self.btn_sync_folder.setVisible(ai)
-        self.lbl_last_sync.setVisible(ai)
+        show_sync = ai and bool(self.config.folder.strip())
+        self.btn_sync_folder.setVisible(show_sync)
+        self.lbl_last_sync.setVisible(show_sync)
         self._update_last_sync_label()
         self.lbl_rule34_section.setVisible(not ai)
         self.btn_rule34.setVisible(not ai)
@@ -464,6 +467,7 @@ class MainWindow(QMainWindow):
             )
             return
         known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
+        known.extend(self._sync_ignored)
         self.btn_sync_folder.setEnabled(False)
         worker = Worker(
             self,
@@ -506,13 +510,13 @@ class MainWindow(QMainWindow):
         )
         progress = self._busy_progress(f"Importiere {len(paths)} Bild(er) …")
         importer.finished.connect(
-            lambda: self._apply_folder_sync(importer, progress)
+            lambda: self._apply_folder_sync(importer, progress, paths)
         )
         importer.start()
         progress.show()
 
     def _apply_folder_sync(
-        self, worker: Worker, progress: QProgressDialog
+        self, worker: Worker, progress: QProgressDialog, paths: list[str]
     ) -> None:
         """Report the finished folder import and record the sync time."""
         progress.close()
@@ -524,6 +528,12 @@ class MainWindow(QMainWindow):
         result = worker.result
         if result is None:
             return
+        stored = {
+            norm_path(entry.image_path) for entry in self.db.get_by_type("Bilder")
+        }
+        self._sync_ignored.update(
+            path for path in paths if norm_path(path) not in stored
+        )
         self._mark_folder_synced()
         if result.added:
             self.refresh_data()
@@ -1014,6 +1024,7 @@ class MainWindow(QMainWindow):
 
         self.thumbnail_cache.clear()
         self.recent_picks = []
+        self._sync_ignored.clear()
         self.inp_search.blockSignals(True)
         self.inp_search.clear()
         self.inp_search.blockSignals(False)
