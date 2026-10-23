@@ -175,6 +175,24 @@ def test_collect_new_posts_multi_advances_lines_before_dedupe(monkeypatch):
     assert newest_ids[query_signature("dog", False)] == 12
 
 
+def test_collect_new_posts_multi_fetches_equivalent_lines_once(monkeypatch):
+    requested = []
+
+    def fake_fetch(api_key, user_id, tags, webm, limit, *, opener=None):
+        requested.append(tags)
+        return [Post(5, "https://x/a.png")]
+
+    monkeypatch.setattr(rule34, "fetch_posts", fake_fetch)
+
+    posts, newest_ids = collect_new_posts_multi(
+        "key", "42", "cat dog\ndog cat", False, 10, {}
+    )
+
+    assert requested == ["cat dog"]
+    assert [(post.id, post.group) for post in posts] == [(5, "cat dog")]
+    assert newest_ids == {query_signature("cat dog", False): 5}
+
+
 def test_query_signature_ignores_order_and_spacing():
     assert query_signature("Cat   Dog", False) == query_signature("dog cat", False)
     assert query_signature("cat sort:score:desc", False) == query_signature(

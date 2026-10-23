@@ -674,10 +674,10 @@ class Rule34Dialog(QDialog):
         layout.addWidget(self.inp_tags)
 
         self.lst_tags = QListWidget()
-        self.lst_tags.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.lst_tags.setMaximumHeight(110)
         self.lst_tags.setVisible(False)
         self.lst_tags.itemClicked.connect(self._apply_suggestion)
+        self.lst_tags.itemActivated.connect(self._apply_suggestion)
         layout.addWidget(self.lst_tags)
 
         self._suggest_timer = QTimer(self)
@@ -792,6 +792,8 @@ class Rule34Dialog(QDialog):
         cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
         cursor.insertText(item.text() + " ")
         self.inp_tags.setTextCursor(cursor)
+        self.inp_tags.setFocus()
+        self._suggest_word = ""
         self._hide_suggestions()
 
     def done(self, result: int) -> None:
@@ -801,7 +803,7 @@ class Rule34Dialog(QDialog):
         self._suggest_worker = None
         if worker is not None:
             worker.finished.disconnect(self._on_suggestions)
-            worker.wait(6000)
+            worker.wait()
         super().done(result)
 
     def _accept(self) -> None:

@@ -535,10 +535,8 @@ class MainWindow(QMainWindow):
             )
             return
         if newest_ids:
-            for signature, post_id in newest_ids.items():
-                self.config.rule34_last_ids[signature] = max(
-                    self.config.rule34_last_ids.get(signature, 0), post_id
-                )
+            # Replace, so a reset can move the stored ID back after deletions.
+            self.config.rule34_last_ids.update(newest_ids)
             save_configs(self.configs, self.config.db_path)
         QMessageBox.information(self, "rule34 Import", summary)
 

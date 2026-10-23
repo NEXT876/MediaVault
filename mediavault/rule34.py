@@ -257,8 +257,13 @@ def collect_new_posts_multi(
     """
     posts: dict[int, Post] = {}
     newest_ids: dict[str, int] = {}
+    seen: set[str] = set()
     for query in split_queries(tags):
         signature = query_signature(query, webm)
+        # Tag order and sort tokens do not change the search.
+        if signature in seen:
+            continue
+        seen.add(signature)
         fresh = collect_new_posts(
             api_key,
             user_id,
