@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import urllib.parse
@@ -10,9 +11,11 @@ from mediavault.rule34 import (
     Post,
     Rule34Error,
     build_query,
+    download_and_import,
     download_post,
     fetch_and_import,
     fetch_posts,
+    fetch_preview,
     parse_posts,
     query_signature,
     select_new_posts,
@@ -65,7 +68,10 @@ def test_build_query_drops_user_sort_tokens():
 
 
 def test_query_signature_ignores_order_and_spacing():
-    assert query_signature("Cat   Dog", False) == query_signature("cat dog", False)
+    assert query_signature("Cat   Dog", False) == query_signature("dog cat", False)
+    assert query_signature("cat sort:score:desc", False) == query_signature(
+        "cat", False
+    )
     assert query_signature("cat", True) != query_signature("cat", False)
 
 
@@ -80,7 +86,11 @@ def test_select_new_posts_filters_sorts_and_limits():
 
 def test_parse_posts_skips_broken_entries():
     payload = [
-        {"id": "7", "file_url": "https://example.test/a.png", "tags": "cat"},
+        {
+            "id": "7",
+            "file_url": "https://example.test/a.png",
+            "preview_url": "https://example.test/a.jpg",
+        },
         {"id": "bad", "file_url": "https://example.test/b.png"},
         {"id": 8, "file_url": ""},
         "not a post",
@@ -88,14 +98,19 @@ def test_parse_posts_skips_broken_entries():
 
     posts = parse_posts(payload)
 
-    assert [(post.id, post.file_url) for post in posts] == [
-        (7, "https://example.test/a.png")
+    assert [(post.id, post.file_url, post.preview_url) for post in posts] == [
+        (7, "https://example.test/a.png", "https://example.test/a.jpg")
     ]
 
 
 def test_parse_posts_rejects_error_response():
     with pytest.raises(Rule34Error):
         parse_posts({"success": False, "message": "API error"})
+
+
+def test_parse_posts_surfaces_string_message():
+    with pytest.raises(Rule34Error, match="Missing authentication"):
+        parse_posts("Missing authentication.")
 
 
 def test_fetch_posts_sends_credentials_and_search():
@@ -124,6 +139,38 @@ def test_fetch_posts_error_does_not_leak_key():
         fetch_posts("secret-key", "42", "cat", False, 5, opener=failing)
 
     assert "secret-key" not in str(error.value)
+
+
+def test_fetch_posts_requires_api_key():
+    def unused(request, timeout=None):
+        raise AssertionError("no request without an API key")
+
+    with pytest.raises(Rule34Error):
+        fetch_posts("", "42", "cat", False, 5, opener=unused)
+
+
+def test_fetch_preview_returns_bytes():
+    data = fetch_preview(
+        "https://example.test/thumb.jpg", opener=_bytes_opener(b"thumb")
+    )
+
+    assert data == b"thumb"
+
+
+def test_fetch_preview_returns_none_on_error_or_bad_scheme():
+    def failing(request, timeout=None):
+        raise OSError("no network")
+
+    assert fetch_preview("https://example.test/thumb.jpg", opener=failing) is None
+    assert fetch_preview("file:///etc/passwd", opener=failing) is None
+
+
+def test_fetch_posts_wraps_truncated_response():
+    def failing(request, timeout=None):
+        raise http.client.IncompleteRead(b"partial")
+
+    with pytest.raises(Rule34Error):
+        fetch_posts("secret-key", "42", "cat", False, 5, opener=failing)
 
 
 def test_download_post_writes_file_atomically(tmp_path):
@@ -189,6 +236,34 @@ def test_fetch_and_import_adds_both_media_types(tmp_path, monkeypatch):
     types = {entry.entry_type for entry in db.entries}
     assert types == {"Bilder", "Videos"}
     assert {entry.group for entry in db.entries} == {"cat"}
+
+
+def test_download_and_import_only_downloads_selected(tmp_path, monkeypatch):
+    db = MediaDatabase(str(tmp_path / "db.json"))
+    posts = [
+        Post(5, "https://example.test/a.png"),
+        Post(4, "https://example.test/b.png"),
+    ]
+    downloaded = []
+
+    def fake_download(post, folder, **kwargs):
+        downloaded.append(post.id)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"rule34_{post.id}.png")
+        with open(path, "wb") as f:
+            f.write(b"image")
+        return path
+
+    monkeypatch.setattr(rule34, "download_post", fake_download)
+
+    result = download_and_import(
+        db, posts, folder=str(tmp_path), tags="cat", selected_ids={4}
+    )
+
+    assert downloaded == [4]
+    assert result.imported == 1
+    # Deselected posts are still marked as seen.
+    assert result.newest_id == 5
 
 
 def test_fetch_and_import_records_failed_downloads(tmp_path, monkeypatch):

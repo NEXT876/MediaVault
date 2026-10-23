@@ -31,7 +31,7 @@ class Post:
 
     id: int
     file_url: str
-    tags: str = ""
+    preview_url: str = ""
 
 
 @dataclass
@@ -40,7 +40,6 @@ class Rule34Result:
 
     imported: int = 0
     duplicates: int = 0
-    skipped: int = 0
     failed: list[str] = field(default_factory=list)
     newest_id: int = 0
 
@@ -60,8 +59,11 @@ def _clamp_limit(limit: int) -> int:
 
 
 def query_signature(tags: str, webm: bool) -> str:
-    """Return a stable key for one saved incremental search."""
-    return f"{_normalized_tags(tags).casefold()}|{'webm' if webm else 'image'}"
+    """Return a key for the actual search, independent of tag order."""
+    tokens = build_query(tags, webm).split(" ")
+    return "|".join(
+        sorted(token.casefold() for token in tokens if token != "sort:id:desc")
+    )
 
 
 def build_query(tags: str, webm: bool) -> str:
@@ -79,6 +81,9 @@ def build_query(tags: str, webm: bool) -> str:
 
 def parse_posts(payload: Any) -> list[Post]:
     """Turn an API response into posts, rejecting error responses."""
+    if isinstance(payload, str):
+        # Rejected credentials arrive as a bare JSON string.
+        raise Rule34Error(payload.strip() or "rule34 hat die Anfrage abgelehnt.")
     if isinstance(payload, Mapping):
         message = payload.get("message") or "rule34 hat die Anfrage abgelehnt."
         raise Rule34Error(str(message))
@@ -96,7 +101,8 @@ def parse_posts(payload: Any) -> list[Post]:
         file_url = str(item.get("file_url") or "").strip()
         if post_id <= 0 or not file_url:
             continue
-        posts.append(Post(post_id, file_url, str(item.get("tags") or "")))
+        preview_url = str(item.get("preview_url") or "").strip()
+        posts.append(Post(post_id, file_url, preview_url))
     return posts
 
 
@@ -133,7 +139,7 @@ def fetch_posts(
     try:
         with opener(request, timeout=30) as response:
             payload = json.load(response)
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         # Never surface the request URL, which contains the API key.
         raise Rule34Error("rule34 ist nicht erreichbar.") from None
     return parse_posts(payload)
@@ -148,6 +154,38 @@ def select_new_posts(posts: list[Post], last_id: int, limit: int) -> list[Post]:
         reverse=True,
     )
     return fresh[:limit]
+
+
+def collect_new_posts(
+    api_key: str,
+    user_id: str,
+    tags: str,
+    webm: bool,
+    limit: int,
+    last_id: int,
+    *,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> list[Post]:
+    """Return the newest posts the search has not imported yet."""
+    return select_new_posts(
+        fetch_posts(api_key, user_id, tags, webm, limit, opener=opener),
+        last_id,
+        limit,
+    )
+
+
+def fetch_preview(
+    url: str, *, opener: Callable[..., Any] = urllib.request.urlopen
+) -> bytes | None:
+    """Return the thumbnail bytes for one post, or None if unavailable."""
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        return None
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with opener(request, timeout=30) as response:
+            return response.read()
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
 
 
 def download_dir(config_folder: str) -> str:
@@ -200,29 +238,21 @@ def download_post(
     return destination
 
 
-def fetch_and_import(
+def download_and_import(
     db: MediaDatabase,
+    posts: list[Post],
     *,
     folder: str,
     tags: str,
-    api_key: str,
-    user_id: str,
-    last_id: int,
-    limit: int,
-    webm: bool,
+    selected_ids: set[int] | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> Rule34Result:
-    """Fetch the newest posts, download them and add them to the database.
+    """Download and import ``posts``, optionally only those in ``selected_ids``.
 
-    Download failures are collected in ``failed``; callers must not advance
-    their stored ID in that case.
+    ``newest_id`` covers all fetched posts, so deselected posts are not shown
+    again on the next run.
     """
     result = Rule34Result()
-    posts = select_new_posts(
-        fetch_posts(api_key, user_id, tags, webm, limit, opener=opener),
-        last_id,
-        limit,
-    )
     if not posts:
         return result
 
@@ -230,8 +260,8 @@ def fetch_and_import(
     destination = download_dir(folder)
     paths: dict[str, list[str]] = {"Bilder": [], "Videos": []}
     for post in posts:
-        target = _target_path(post, destination)
-        already_there = os.path.isfile(target) and os.path.getsize(target) > 0
+        if selected_ids is not None and post.id not in selected_ids:
+            continue
         try:
             path = download_post(post, destination, opener=opener)
         except (OSError, ValueError, http.client.HTTPException, Rule34Error) as exc:
@@ -239,8 +269,6 @@ def fetch_and_import(
             detail = str(exc) if isinstance(exc, Rule34Error) else type(exc).__name__
             result.failed.append(f"Post {post.id}: {detail}")
             continue
-        if already_there:
-            result.skipped += 1
         media_type = "Videos" if _is_video(path) else "Bilder"
         paths[media_type].append(path)
 
@@ -258,6 +286,29 @@ def fetch_and_import(
         result.imported += imported.added
         result.duplicates += imported.duplicates
     return result
+
+
+def fetch_and_import(
+    db: MediaDatabase,
+    *,
+    folder: str,
+    tags: str,
+    api_key: str,
+    user_id: str,
+    last_id: int,
+    limit: int,
+    webm: bool,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> Rule34Result:
+    """Fetch the newest posts, download them and add them to the database.
+
+    Download failures are collected in ``failed``; callers must not advance
+    their stored ID in that case.
+    """
+    posts = collect_new_posts(
+        api_key, user_id, tags, webm, limit, last_id, opener=opener
+    )
+    return download_and_import(db, posts, folder=folder, tags=tags, opener=opener)
 
 
 def _is_video(path: str) -> bool:
