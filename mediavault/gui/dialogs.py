@@ -31,12 +31,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mediavault import volumes
 from mediavault.ai_meta import format_ai_meta, summarize_prompts
 from mediavault.config import (
     MODE_AI,
     MODE_NORMAL,
     VaultConfig,
     create_config,
+    resolve_folder,
     save_configs,
 )
 from mediavault.gui.widgets import rounded_pixmap
@@ -80,12 +82,14 @@ class DetailDialog(QDialog):
         entry: MediaItem,
         db: MediaDatabase,
         get_pixmap_func: Callable[[MediaItem], QPixmap | None],
+        root: str = "",
     ) -> None:
         """Initialize the detail dialog for ``entry``."""
         super().__init__(parent)
         self.entry = entry
         self.db = db
         self.get_pixmap = get_pixmap_func
+        self.root = root
         self.setWindowTitle(entry.title)
         self.setMinimumSize(540, 720)
         self.resize(560, 760)
@@ -212,11 +216,22 @@ class DetailDialog(QDialog):
 
     def _play_media(self) -> None:
         """Open the media file and update counters and timestamp."""
-        path = (
+        stored = (
             self.entry.video_link
             if self.entry.entry_type == "Videos"
             else self.entry.image_path
         )
+        path = volumes.absolute_path(stored, self.root)
+        if not path or not os.path.isfile(path):
+            QMessageBox.warning(
+                self,
+                "Nicht verfügbar",
+                "Die Datei ist nicht erreichbar. Ist der Stick mit dieser "
+                "Mediathek verbunden?"
+                if not self.root
+                else "Die Datei wurde auf dem Stick nicht gefunden.",
+            )
+            return
         OSHelper.open_file(path)
         self.entry.watched_counter += 1
         self.entry.last_watched = time.time()
@@ -248,12 +263,14 @@ class EditDialog(QDialog):
         entry_type: str,
         entry: MediaItem | None = None,
         ai_meta: dict[str, Any] | None = None,
+        root: str = "",
     ) -> None:
         """Initialize the edit dialog for a new or existing entry."""
         super().__init__(parent)
         self.db = db
         self.entry = entry
         self.ai_meta = ai_meta or {}
+        self.root = root
         self.entry_type = entry.entry_type if entry else entry_type
         self.setWindowTitle("Bearbeiten" if entry else "Erstellen")
         self.setMinimumSize(460, 640)
@@ -369,10 +386,14 @@ class EditDialog(QDialog):
         title = self.inp_title.text().strip()
         group = self.inp_group.currentText().strip()
         desc = self.inp_desc.toPlainText().strip()
-        img = self.inp_img.text()
-        vid = self.inp_video.text() if self.entry_type == "Videos" else ""
+        img = volumes.stored_path(self.inp_img.text().strip(), self.root)
+        vid = (
+            volumes.stored_path(self.inp_video.text().strip(), self.root)
+            if self.entry_type == "Videos"
+            else ""
+        )
 
-        media = img or vid
+        media = volumes.absolute_path(img or vid, self.root)
         try:
             file_hash = content_hash(media) if media else ""
         except OSError:
@@ -513,6 +534,9 @@ class ConfigDialog(QDialog):
         super().__init__(parent)
         self.configs = list(configs)
         self.selected_config: VaultConfig | None = None
+        self._volume_uuid = ""
+        self._volume_label = ""
+        self._folder_rel = ""
         self.setWindowTitle("Config wechseln")
         self.setMinimumSize(520, 560)
         self._build_ui(current_db_path)
@@ -527,8 +551,12 @@ class ConfigDialog(QDialog):
         self.list_configs = QListWidget()
         for config in self.configs:
             mode = "KI-Bilder" if config.mode == MODE_AI else "Normal"
-            folder = config.folder or "kein Ordner"
-            item = QListWidgetItem(f"{config.name} · {mode} · {folder}")
+            if config.volume_uuid:
+                state = "verbunden" if resolve_folder(config) else "nicht verbunden"
+                location = f"{config.volume_label or 'Stick'} · {state}"
+            else:
+                location = config.folder or "kein Ordner"
+            item = QListWidgetItem(f"{config.name} · {mode} · {location}")
             item.setData(Qt.ItemDataRole.UserRole, config.db_path)
             self.list_configs.addItem(item)
             if config.db_path == current_db_path:
@@ -562,10 +590,16 @@ class ConfigDialog(QDialog):
         btn_folder.setProperty("variant", "secondary")
         btn_folder.clicked.connect(self._choose_folder)
         folder_row.addWidget(btn_folder)
+        btn_stick = QPushButton("Vom Stick…")
+        btn_stick.setProperty("variant", "secondary")
+        btn_stick.clicked.connect(self._choose_volume)
+        folder_row.addWidget(btn_stick)
         layout.addLayout(folder_row)
 
         hint = QLabel(
-            "Ohne Ordner startet die Config leer; Bilder danach einzeln importieren."
+            "Ohne Ordner startet die Config leer; Bilder danach einzeln importieren. "
+            "\"Vom Stick\" bindet einen Ordner an die Stick-Identität, damit ein "
+            "anderer Laufwerksbuchstabe nichts kaputt macht."
         )
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
@@ -587,8 +621,42 @@ class ConfigDialog(QDialog):
     def _choose_folder(self) -> None:
         """Pick a scan folder for a new config."""
         folder = QFileDialog.getExistingDirectory(self, "Ordner wählen")
-        if folder:
-            self.inp_folder.setText(folder)
+        if not folder:
+            return
+        self._volume_uuid = ""
+        self._volume_label = ""
+        self._folder_rel = ""
+        self.inp_folder.setText(folder)
+
+    def _choose_volume(self) -> None:
+        """Bind a new config to a folder on a removable volume."""
+        folder = QFileDialog.getExistingDirectory(self, "Ordner auf dem Stick wählen")
+        if not folder:
+            return
+        root, info = volumes.volume_for_path(folder)
+        if not root:
+            QMessageBox.warning(
+                self, "Stick", "Der Ordner liegt auf keinem erkannten Laufwerk."
+            )
+            return
+        if info is None:
+            answer = QMessageBox.question(
+                self,
+                "Stick registrieren",
+                "Dieses Laufwerk ist noch nicht als Mediathek registriert.\n\n"
+                f"Es wird die kleine Datei {volumes.MARKER_NAME} im "
+                f"Wurzelverzeichnis {root} angelegt. Damit findet die App den "
+                "Stick auch nach einem Laufwerksbuchstaben-Wechsel wieder.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            info = volumes.write_marker(
+                root, label=os.path.basename(root.rstrip("\\/")) or root
+            )
+        self._volume_uuid = info.uuid
+        self._volume_label = info.label or root
+        self._folder_rel = volumes.relative_to_root(folder, root)
+        self.inp_folder.setText(f"🔌 {self._volume_label} · /{self._folder_rel}")
 
     def _open_selected(self) -> None:
         """Select the highlighted config and remember it as the last one."""
@@ -614,18 +682,237 @@ class ConfigDialog(QDialog):
                 self, "Fehler", "Eine Config mit diesem Namen existiert bereits."
             )
             return
-        folder = self.inp_folder.text().strip()
+        folder = "" if self._volume_uuid else self.inp_folder.text().strip()
         if folder and not os.path.isdir(folder):
             QMessageBox.warning(self, "Fehler", "Der Ordner existiert nicht.")
             return
 
         config = create_config(
-            name, self.combo_mode.currentData(), folder, self.configs
+            name,
+            self.combo_mode.currentData(),
+            folder,
+            self.configs,
+            volume_uuid=self._volume_uuid,
+            volume_label=self._volume_label,
+            folder_rel=self._folder_rel,
         )
         self.configs.append(config)
         save_configs(self.configs, config.db_path)
         self.selected_config = config
         self.accept()
+
+class StickDialog(QDialog):
+    """Create a config from a stick folder or bind the active config to one."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        configs: list[VaultConfig],
+        config: VaultConfig,
+    ) -> None:
+        """Initialize the dialog for the currently active config."""
+        super().__init__(parent)
+        self.configs = list(configs)
+        self.config = config
+        self.target_db_path = ""
+        self._roots: list[str] = []
+        self._folder = ""
+        self._volume_uuid = ""
+        self._volume_label = ""
+        self._folder_rel = ""
+        self.setWindowTitle("Stick einrichten")
+        self.setMinimumSize(620, 540)
+        self._build_ui()
+        self._fill_volumes()
+
+    def _build_ui(self) -> None:
+        """Build the drive list, the folder picker and the two actions."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "Stick einstecken, hier den Medien-Ordner wählen und dann entweder "
+            "eine neue Config anlegen oder die aktive Config auf diesen Ordner "
+            "umstellen. Alles, was du danach von Hand hinzufügst, kopiert die App "
+            "in genau diesen Ordner."
+        )
+        intro.setObjectName("MutedLabel")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        layout.addWidget(_field_label("Laufwerke"))
+        self.list_volumes = QListWidget()
+        self.list_volumes.currentItemChanged.connect(self._on_volume_selected)
+        layout.addWidget(self.list_volumes, 1)
+
+        self.btn_pick = QPushButton("Ordner auf diesem Laufwerk wählen…")
+        self.btn_pick.setProperty("variant", "secondary")
+        self.btn_pick.setEnabled(False)
+        self.btn_pick.clicked.connect(self._choose_folder)
+        layout.addWidget(self.btn_pick)
+
+        self.lbl_folder = QLabel("Noch kein Ordner gewählt.")
+        self.lbl_folder.setObjectName("HintLabel")
+        self.lbl_folder.setWordWrap(True)
+        layout.addWidget(self.lbl_folder)
+
+        layout.addSpacing(6)
+        layout.addWidget(_field_label("Neue Config"))
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        self.inp_name = QLineEdit()
+        self.inp_name.setPlaceholderText("Name der neuen Config")
+        name_row.addWidget(self.inp_name, 1)
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem("Normale Medien", MODE_NORMAL)
+        self.combo_mode.addItem("KI-Bilder", MODE_AI)
+        name_row.addWidget(self.combo_mode)
+        layout.addLayout(name_row)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        self.btn_assign = QPushButton("Aktiver Config zuweisen")
+        self.btn_assign.setProperty("variant", "secondary")
+        self.btn_assign.setEnabled(False)
+        self.btn_assign.clicked.connect(self._assign_to_current)
+        self.btn_create = QPushButton("Neue Config anlegen")
+        self.btn_create.setProperty("variant", "primary")
+        self.btn_create.setEnabled(False)
+        self.btn_create.clicked.connect(self._create_new)
+        buttons.addWidget(btn_cancel)
+        buttons.addStretch()
+        buttons.addWidget(self.btn_assign)
+        buttons.addWidget(self.btn_create)
+        layout.addLayout(buttons)
+
+    def _fill_volumes(self) -> None:
+        """List every mounted volume, marking the vault-enabled ones."""
+        self.list_volumes.clear()
+        self._roots = volumes.mounted_roots()
+        preselect = -1
+        for index, root in enumerate(self._roots):
+            info = volumes.read_marker(root)
+            if info is not None:
+                owner = next(
+                    (
+                        item.name
+                        for item in self.configs
+                        if item.volume_uuid == info.uuid
+                    ),
+                    "",
+                )
+                state = f"Config \u201e{owner}\u201c" if owner else "noch nicht zugeordnet"
+                text = f"🔌 {info.label or root} · {root} · {state}"
+                if self.config.volume_uuid and info.uuid == self.config.volume_uuid:
+                    preselect = index
+            else:
+                text = f"💾 {root} · kein Stick"
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, root)
+            self.list_volumes.addItem(item)
+
+        if not self._roots:
+            self.lbl_folder.setText(
+                "Kein Laufwerk erkannt. Stick einstecken und den Dialog erneut öffnen."
+            )
+            self.btn_pick.setEnabled(False)
+            return
+        self.btn_pick.setEnabled(True)
+        preselect = max(preselect, 0)
+        self.list_volumes.setCurrentRow(preselect)
+
+    def _on_volume_selected(self, *_args: object) -> None:
+        """Re-enable the folder picker when the selection changes."""
+        self.btn_pick.setEnabled(self.list_volumes.currentItem() is not None)
+
+    def _choose_folder(self) -> None:
+        """Pick a media folder on the selected drive and remember its volume."""
+        item = self.list_volumes.currentItem()
+        if item is None:
+            QMessageBox.information(self, "Stick", "Bitte zuerst ein Laufwerk wählen.")
+            return
+        root = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Ordner auf dem Laufwerk wählen", root
+        )
+        if not folder:
+            return
+        actual_root, info = volumes.volume_for_path(folder, self._roots)
+        if not actual_root:
+            QMessageBox.warning(
+                self, "Stick", "Der Ordner liegt auf keinem erkannten Laufwerk."
+            )
+            return
+        if info is None:
+            answer = QMessageBox.question(
+                self,
+                "Stick registrieren",
+                "Dieses Laufwerk ist noch nicht als Mediathek registriert.\n\n"
+                f"Es wird die kleine Datei {volumes.MARKER_NAME} im "
+                f"Wurzelverzeichnis {actual_root} angelegt. Damit findet die App "
+                "den Ordner auch nach einem Laufwerksbuchstaben-Wechsel wieder.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            info = volumes.write_marker(
+                actual_root, label=os.path.basename(actual_root.rstrip("\\/")) or actual_root
+            )
+            self._fill_volumes()
+
+        self._folder = folder
+        self._volume_uuid = info.uuid
+        self._volume_label = info.label or actual_root
+        self._folder_rel = volumes.relative_to_root(folder, actual_root)
+        self.lbl_folder.setText(f"Ordner: {folder}")
+        if not self.inp_name.text().strip():
+            self.inp_name.setText(os.path.basename(folder.rstrip("\\/")) or "Stick")
+        self.btn_assign.setEnabled(True)
+        self.btn_create.setEnabled(True)
+
+    def _assign_to_current(self) -> None:
+        """Point the active config at the chosen folder."""
+        if not self._volume_uuid:
+            return
+        self.config.volume_uuid = self._volume_uuid
+        self.config.volume_label = self._volume_label
+        self.config.folder_rel = self._folder_rel
+        self.config.folder = ""
+        save_configs(self.configs, self.config.db_path)
+        self.target_db_path = self.config.db_path
+        self.accept()
+
+    def _create_new(self) -> None:
+        """Create a new config bound to the chosen folder."""
+        name = self.inp_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Fehler", "Name ist erforderlich.")
+            return
+        if any(item.name.casefold() == name.casefold() for item in self.configs):
+            QMessageBox.warning(
+                self, "Fehler", "Eine Config mit diesem Namen existiert bereits."
+            )
+            return
+        if not self._volume_uuid:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst einen Ordner wählen.")
+            return
+        config = create_config(
+            name,
+            self.combo_mode.currentData(),
+            "",
+            self.configs,
+            volume_uuid=self._volume_uuid,
+            volume_label=self._volume_label,
+            folder_rel=self._folder_rel,
+        )
+        self.configs.append(config)
+        save_configs(self.configs, config.db_path)
+        self.target_db_path = config.db_path
+        self.accept()
+
 
 
 class Rule34Dialog(QDialog):

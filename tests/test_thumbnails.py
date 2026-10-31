@@ -1,5 +1,6 @@
 """Tests for background preview loading."""
 
+import os
 from pathlib import Path
 
 from PyQt6.QtGui import QImage
@@ -37,10 +38,10 @@ def test_load_thumbnails_keeps_other_previews_when_one_fails(tmp_path, monkeypat
     )
     bad = MediaItem(title="bad", image_path="broken")
 
-    def fake_load(entry):
+    def fake_load(entry, root=""):
         if entry is bad:
             raise OSError("broken file")
-        return load_thumbnail(entry)
+        return load_thumbnail(entry, root)
 
     monkeypatch.setattr(thumbnails, "load_thumbnail", fake_load)
 
@@ -48,3 +49,23 @@ def test_load_thumbnails_keeps_other_previews_when_one_fails(tmp_path, monkeypat
 
     assert previews[good.media_path] is not None
     assert previews[bad.media_path] is None
+
+
+def test_thumbnail_is_cached_and_survives_a_missing_source(tmp_path):
+    source = tmp_path / "a.png"
+    entry = MediaItem(title="a", image_path=_write_image(source, 640, 480))
+
+    first = load_thumbnail(entry)
+    source.unlink()
+    second = load_thumbnail(entry)
+
+    assert first is not None and second is not None
+    assert (second.width(), second.height()) == (first.width(), first.height())
+
+
+def test_missing_source_leaves_no_cache_file(tmp_path):
+    entry = MediaItem(title="gone", image_path=str(tmp_path / "nope.png"))
+
+    assert load_thumbnail(entry) is None
+    assert thumbnails.cache_path(entry)
+    assert not os.path.exists(thumbnails.cache_path(entry))

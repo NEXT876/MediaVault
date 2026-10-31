@@ -8,6 +8,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from mediavault import volumes
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(
@@ -17,6 +19,7 @@ CONFIGS_PATH = os.path.join(os.path.expanduser("~"), ".mediavault", "configs.jso
 MODE_NORMAL = "normal"
 MODE_AI = "ai"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv"}
 
 
 @dataclass
@@ -36,6 +39,11 @@ class VaultConfig:
     # Appended last so existing positional construction keeps working.
     folder_last_sync: str = ""
     rule34_saved_tags: dict[str, str] = field(default_factory=dict)
+    # Set for configs whose media lives on a removable volume; folder_rel is
+    # then the location inside that volume, not an absolute path.
+    volume_uuid: str = ""
+    volume_label: str = ""
+    folder_rel: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
@@ -54,6 +62,9 @@ class VaultConfig:
             rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
             folder_last_sync=str(data.get("folder_last_sync") or ""),
             rule34_saved_tags=_saved_tags(data.get("rule34_saved_tags")),
+            volume_uuid=str(data.get("volume_uuid") or ""),
+            volume_label=str(data.get("volume_label") or ""),
+            folder_rel=str(data.get("folder_rel") or ""),
         )
 
 
@@ -165,6 +176,9 @@ def create_config(
     folder: str = "",
     existing: Iterable[VaultConfig] = (),
     base_dir: str | None = None,
+    volume_uuid: str = "",
+    volume_label: str = "",
+    folder_rel: str = "",
 ) -> VaultConfig:
     """Create a config with a unique database path, without saving it."""
     base_dir = base_dir or os.path.join(os.path.expanduser("~"), ".mediavault", "data")
@@ -179,7 +193,68 @@ def create_config(
         mode=mode if mode in (MODE_NORMAL, MODE_AI) else MODE_NORMAL,
         db_path=os.path.join(base_dir, f"{candidate}.json"),
         folder=folder,
+        volume_uuid=volume_uuid,
+        volume_label=volume_label,
+        folder_rel=folder_rel,
     )
+
+
+def is_volume_config(config: VaultConfig) -> bool:
+    """Return True if the config's media lives on a removable volume."""
+    return bool(config.volume_uuid)
+
+
+def storage_root(config: VaultConfig) -> str:
+    """Return the root stored paths are relative to, or '' when unplugged."""
+    if not config.volume_uuid:
+        return ""
+    return volumes.find_volume(config.volume_uuid)
+
+
+def resolve_folder(config: VaultConfig) -> str:
+    """Return the config's media folder, or '' when its volume is unplugged."""
+    if config.volume_uuid:
+        root = storage_root(config)
+        if not root:
+            return ""
+        return volumes.resolve(root, config.folder_rel) if config.folder_rel else root
+    return config.folder
+
+
+def find_new_media(
+    folder: str,
+    known_paths: Iterable[str],
+    *,
+    image_exts: Iterable[str] = IMAGE_EXTS,
+    video_exts: Iterable[str] = VIDEO_EXTS,
+    root: str = "",
+) -> tuple[list[str], list[str]]:
+    """Return the images and videos in folder that are not yet known.
+
+    Known paths are compared through volumes.path_key, so entries stored
+    relative to a volume still match the absolute paths found on disk.
+    """
+    if not os.path.isdir(folder):
+        logger.warning("Ordner nicht gefunden: %s", folder)
+        return [], []
+    known = {volumes.path_key(path, root) for path in known_paths if path}
+    images_ext = {extension.casefold() for extension in image_exts}
+    videos_ext = {extension.casefold() for extension in video_exts}
+    images: list[str] = []
+    videos: list[str] = []
+    for current, _dirs, files in os.walk(folder):
+        for name in files:
+            extension = os.path.splitext(name)[1].casefold()
+            if extension in images_ext:
+                bucket = images
+            elif extension in videos_ext:
+                bucket = videos
+            else:
+                continue
+            path = os.path.join(current, name)
+            if volumes.path_key(path, root) not in known:
+                bucket.append(path)
+    return sorted(images), sorted(videos)
 
 
 def find_new_images(
@@ -188,20 +263,13 @@ def find_new_images(
     extensions: Iterable[str] = IMAGE_EXTS,
 ) -> list[str]:
     """Return image paths in ``folder`` that are not yet known."""
-    if not os.path.isdir(folder):
-        logger.warning("Ordner nicht gefunden: %s", folder)
-        return []
-    known = {os.path.normcase(os.path.abspath(path)) for path in known_paths}
-    allowed = {extension.casefold() for extension in extensions}
-    found: list[str] = []
-    for root, _dirs, files in os.walk(folder):
-        for name in files:
-            if os.path.splitext(name)[1].casefold() not in allowed:
-                continue
-            path = os.path.join(root, name)
-            if os.path.normcase(os.path.abspath(path)) not in known:
-                found.append(path)
-    return sorted(found)
+    images, _videos = find_new_media(
+        folder,
+        known_paths,
+        image_exts=extensions,
+        video_exts=(),
+    )
+    return images
 
 
 def setup_logging() -> None:

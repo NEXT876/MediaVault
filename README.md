@@ -16,7 +16,9 @@ MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mi
 - **Zufallsauswahl**: Lokaler und globaler Zufall, inkl. "Smart"-Modus (gewichtet nach Score, Aufrufen und letzter Wiedergabe) sowie Zufall innerhalb ausgewählter Gruppen
 - **Batch-Aktionen**: Mehrfachauswahl zum gleichzeitigen Bewerten, Gruppieren und Löschen
 - **Massenimport**: Mehrere Bilder oder Videos auf einmal importieren (Duplikate werden übersprungen)
-- **Thumbnails**: Automatische Vorschaubilder über OS-Thumbnails (nur Linux) bzw. extrahierte Videoframes (via OpenCV)
+- **Thumbnails**: Automatische Vorschaubilder über OS-Thumbnails (nur Linux) bzw. extrahierte Videoframes (via OpenCV); einmal erzeugte Vorschauen liegen als WebP in `~/.mediavault/thumbs` und sind auch ohne Stick da
+- **Stick-Modus**: USB-Stick einstecken, `🔌 Stick einrichten` öffnen, Ordner wählen – entweder als neue Config anlegen oder die aktive Config darauf umstellen. Referenzen werden relativ zur Stick-Identität gespeichert (Marker-Datei `.mediavault-vault`), damit ein anderer Laufwerksbuchstabe nichts kaputt macht
+- **Kopieren beim Hinzufügen**: Bilder und Videos, die von Hand importiert werden, kopiert die App in den Ordner der aktiven Config
 - **Responsive Grid**: Die Kachelansicht passt die Spaltenanzahl automatisch an die Fenstergröße an
 - **Themes**: Dark und Light live umschaltbar; die Auswahl bleibt über Neustarts erhalten
 
