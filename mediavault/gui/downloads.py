@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mediavault.gui.dialogs import Worker
+from mediavault.gui.worker import Worker
 from mediavault.models import MediaDatabase
 from mediavault.rule34 import Post, download_and_import
 

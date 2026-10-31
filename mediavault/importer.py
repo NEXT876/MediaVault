@@ -66,24 +66,18 @@ def build_entry(
         if not meta:
             logger.info("Kein KI-Bild, übersprungen: %s", path)
             return None
-    title = os.path.splitext(os.path.basename(path))[0]
-    stored = volumes.stored_path(path, root)
-    img, vid = (stored, "") if type_str == "Bilder" else ("", stored)
-    try:
-        file_hash = content_hash(path)
-    except OSError:
-        file_hash = ""
-    return MediaItem(
-        title,
-        img,
-        50,
-        "",
-        type_str,
-        vid,
+    entry = MediaItem(
+        os.path.splitext(os.path.basename(path))[0],
+        entry_type=type_str,
         group=group,
         ai_meta=meta,
-        content_hash=file_hash,
     )
+    entry.set_file(volumes.stored_path(path, root))
+    try:
+        entry.content_hash = content_hash(path)
+    except OSError:
+        entry.content_hash = ""
+    return entry
 
 
 class _Index:

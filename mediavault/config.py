@@ -199,26 +199,31 @@ def create_config(
     )
 
 
-def is_volume_config(config: VaultConfig) -> bool:
-    """Return True if the config's media lives on a removable volume."""
-    return bool(config.volume_uuid)
+@dataclass(frozen=True)
+class LibraryRoot:
+    """Where a config's media lives right now.
+
+    volume is the mount point stored paths are relative to (empty for local
+    configs), folder the directory to scan (empty while unplugged).
+    """
+
+    volume: str = ""
+    folder: str = ""
+
+    @property
+    def available(self) -> bool:
+        """Return True when the media folder can be read right now."""
+        return bool(self.folder)
 
 
-def storage_root(config: VaultConfig) -> str:
-    """Return the root stored paths are relative to, or '' when unplugged."""
+def locate(config: VaultConfig) -> LibraryRoot:
+    """Resolve a config's volume mount and scan folder with a single probe."""
     if not config.volume_uuid:
-        return ""
-    return volumes.find_volume(config.volume_uuid)
-
-
-def resolve_folder(config: VaultConfig) -> str:
-    """Return the config's media folder, or '' when its volume is unplugged."""
-    if config.volume_uuid:
-        root = storage_root(config)
-        if not root:
-            return ""
-        return volumes.resolve(root, config.folder_rel) if config.folder_rel else root
-    return config.folder
+        return LibraryRoot(folder=config.folder)
+    root = volumes.find_volume(config.volume_uuid)
+    if not root:
+        return LibraryRoot()
+    return LibraryRoot(volume=root, folder=volumes.folder_path(root, config.folder_rel))
 
 
 def find_new_media(
@@ -255,21 +260,6 @@ def find_new_media(
             if volumes.path_key(path, root) not in known:
                 bucket.append(path)
     return sorted(images), sorted(videos)
-
-
-def find_new_images(
-    folder: str,
-    known_paths: Iterable[str],
-    extensions: Iterable[str] = IMAGE_EXTS,
-) -> list[str]:
-    """Return image paths in ``folder`` that are not yet known."""
-    images, _videos = find_new_media(
-        folder,
-        known_paths,
-        image_exts=extensions,
-        video_exts=(),
-    )
-    return images
 
 
 def setup_logging() -> None:

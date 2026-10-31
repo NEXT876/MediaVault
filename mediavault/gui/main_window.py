@@ -4,6 +4,7 @@ import logging
 import os
 from collections.abc import Callable, Iterable
 from datetime import datetime
+from functools import partial
 from typing import Any
 
 from PyQt6.QtCore import (
@@ -47,13 +48,11 @@ from mediavault.config import (
     IMAGE_EXTS,
     MODE_AI,
     VIDEO_EXTS,
-    find_new_images,
+    LibraryRoot,
     find_new_media,
-    is_volume_config,
     load_configs,
-    resolve_folder,
+    locate,
     save_configs,
-    storage_root,
 )
 from mediavault.gui.dialogs import (
     AnalysisDialog,
@@ -62,19 +61,19 @@ from mediavault.gui.dialogs import (
     EditDialog,
     FolderPreviewDialog,
     GroupRandomDialog,
-    Rule34Dialog,
-    Rule34PreviewDialog,
-    StickDialog,
-    Worker,
 )
 from mediavault.gui.downloads import DownloadJob, DownloadsPage, JobState
+from mediavault.gui.rule34_dialog import Rule34Dialog, Rule34PreviewDialog
+from mediavault.gui.stick_banner import StickBanner
+from mediavault.gui.stick_dialog import StickDialog
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.thumbnails import load_thumbnail, load_thumbnails
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
+from mediavault.gui.worker import Worker
 from mediavault.importer import find_duplicate, import_paths, norm_path
 from mediavault.models import MediaDatabase, MediaItem
 from mediavault.rule34 import Post, collect_new_posts_multi, fetch_preview
-from mediavault.transfer import copy_into_folder
+from mediavault.transfer import CopyResult, copy_into_folder
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
@@ -168,6 +167,8 @@ class MainWindow(QMainWindow):
         self._autoscroll_direction = 0
         # Paths the last folder sync could not import; hidden from later syncs.
         self._sync_ignored: set[str] = set()
+        # Last resolved media location, used to notice a plugged or pulled volume.
+        self._location: LibraryRoot | None = None
 
         # The worker that fetches rule34 posts before the preview opens.
         self._rule34_fetch: Worker | None = None
@@ -191,10 +192,6 @@ class MainWindow(QMainWindow):
         self._apply_config_ui()
         self.refresh_data()
 
-        # A stick the user dismissed stays quiet for the rest of the session.
-        self._dismissed_volume = ""
-        self._banner_volume: tuple[str, volumes.VolumeInfo] | None = None
-        self._last_root: str | None = None
         self._volume_timer = QTimer(self)
         self._volume_timer.setInterval(4000)
         self._volume_timer.timeout.connect(self._check_volumes)
@@ -324,7 +321,8 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(24, 20, 24, 20)
         content_layout.setSpacing(12)
 
-        self.stick_banner = self._build_stick_banner()
+        self.stick_banner = StickBanner()
+        self.stick_banner.setup_requested.connect(self._open_stick)
         content_layout.addWidget(self.stick_banner)
 
         top_bar = QHBoxLayout()
@@ -535,40 +533,21 @@ class MainWindow(QMainWindow):
             if ai
             else "Titel, Beschreibung, Gruppe suchen…"
         )
-        self._sync_window_title()
-        self._sync_stick_status()
+        self._check_volumes()
 
-    def _root(self) -> str:
-        """Return the root stored paths are relative to, or '' when unavailable."""
-        return storage_root(self.config)
-
-    def _entry_path(self, entry: MediaItem) -> str:
-        """Return an entry's file path, resolved against the active volume."""
-        stored = (
-            entry.video_link if entry.entry_type == "Videos" else entry.image_path
-        )
-        return volumes.absolute_path(stored, self._root())
-
-    def _entry_available(self, entry: MediaItem) -> bool:
+    @staticmethod
+    def _entry_available(entry: MediaItem, root: str) -> bool:
         """Return True if an entry's file can be read right now."""
-        path = self._entry_path(entry)
+        path = entry.resolve(root)
         return bool(path) and os.path.isfile(path)
 
-    def _copy_into_library(self, paths: list[str]) -> tuple[list[str], int]:
-        """Copy new files into the config folder, returning kept paths and skips."""
-        target = resolve_folder(self.config)
+    def _copy_into_library(self, paths: list[str]) -> CopyResult:
+        """Copy new files into the config folder, skipping known content."""
+        target = locate(self.config).folder
         if not target:
-            return list(paths), 0
+            return CopyResult(copied=list(paths))
         known = {entry.content_hash for entry in self.db.entries if entry.content_hash}
-        result = copy_into_folder(paths, target, known)
-        if result.failed:
-            QMessageBox.warning(
-                self,
-                "Kopieren fehlgeschlagen",
-                f"{len(result.failed)} Datei(en) konnten nicht in den Ordner "
-                "kopiert werden.",
-            )
-        return result.copied, result.skipped
+        return copy_into_folder(paths, target, known)
 
     def scan_folder(self) -> None:
         """Index the config folder into the DB, which acts as the reference cache.
@@ -576,38 +555,29 @@ class MainWindow(QMainWindow):
         The DB keeps every reference, so random picking never touches the disk;
         only media paths and content hashes are written here.
         """
-        root = self._root()
-        folder = resolve_folder(self.config)
-        if not folder or not os.path.isdir(folder):
+        location = locate(self.config)
+        if not location.available or not os.path.isdir(location.folder):
             return
         ai = self.config.mode == MODE_AI
         known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
         known += [entry.video_link for entry in self.db.get_by_type("Videos")]
         images, videos = find_new_media(
-            folder,
+            location.folder,
             known,
             image_exts={".png"} if ai else IMAGE_EXTS,
             video_exts=set() if ai else VIDEO_EXTS,
-            root=root,
+            root=location.volume,
         )
-        if images:
-            import_paths(
-                self.db,
-                images,
-                type_str="Bilder",
-                group="",
-                mode=self.config.mode,
-                root=root,
-            )
-        if videos:
-            import_paths(
-                self.db,
-                videos,
-                type_str="Videos",
-                group="",
-                mode=self.config.mode,
-                root=root,
-            )
+        for paths, type_str in ((images, "Bilder"), (videos, "Videos")):
+            if paths:
+                import_paths(
+                    self.db,
+                    paths,
+                    type_str=type_str,
+                    group="",
+                    mode=self.config.mode,
+                    root=location.volume,
+                )
 
     def auto_scan_folder(self) -> None:
         """Index the config folder on startup unless the config is in AI mode.
@@ -620,42 +590,12 @@ class MainWindow(QMainWindow):
             self.scan_folder()
 
     # --- Removable volumes ---
-    def _build_stick_banner(self) -> QWidget:
-        """Build the inline banner shown when an unused stick is plugged in."""
-        banner = QWidget()
-        banner.setObjectName("ActionBar")
-        row = QHBoxLayout(banner)
-        row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(10)
-        self.lbl_stick_banner = QLabel("")
-        self.lbl_stick_banner.setObjectName("HintLabel")
-        self.lbl_stick_banner.setWordWrap(True)
-        row.addWidget(self.lbl_stick_banner, 1)
-        btn_setup = QPushButton("Einrichten…")
-        btn_setup.setProperty("variant", "primary")
-        btn_setup.clicked.connect(self._open_stick)
-        row.addWidget(btn_setup)
-        btn_close = QPushButton("×")
-        btn_close.setProperty("variant", "ghost")
-        btn_close.setFixedWidth(34)
-        btn_close.clicked.connect(self._dismiss_banner)
-        row.addWidget(btn_close)
-        banner.setVisible(False)
-        return banner
-
-    def _dismiss_banner(self) -> None:
-        """Stop offering this stick for the rest of the session."""
-        if self._banner_volume is not None:
-            self._dismissed_volume = self._banner_volume[1].uuid
-        self.stick_banner.hide()
-
     def _open_stick(self) -> None:
         """Open the stick dialog and activate the config it produced."""
         self.db.save()
         dlg = StickDialog(self, self.configs, self.config)
-        if not dlg.exec() or not dlg.target_db_path:
-            return
-        self._activate_config(dlg.target_db_path)
+        if dlg.exec() and dlg.target_db_path:
+            self._activate_config(dlg.target_db_path)
 
     def _activate_config(self, db_path: str) -> None:
         """Load a config by path, reuse its database and refresh the window."""
@@ -679,62 +619,36 @@ class MainWindow(QMainWindow):
         self.inp_search.blockSignals(False)
         self._apply_selection(set())
         self._anchor_entry = None
-        self._last_root = storage_root(self.config)
+        self._location = locate(self.config)
         self._apply_config_ui()
         self.auto_scan_folder()
         self.refresh_data()
-        self._check_volumes()
-
-    def _sync_window_title(self) -> None:
-        """Show config, mode and a missing volume in the window title."""
-        suffix = " · KI" if self.config.mode == MODE_AI else ""
-        if is_volume_config(self.config) and not storage_root(self.config):
-            suffix += " · 🔌 Stick nicht verbunden"
-        self.setWindowTitle(f"MediaVault – {self.config.name}{suffix}")
-
-    def _sync_stick_status(self) -> None:
-        """Describe the active config's media location in the sidebar."""
-        if self.config.volume_uuid:
-            state = "verbunden" if storage_root(self.config) else "nicht verbunden"
-            label = self.config.volume_label or "Stick"
-            self.lbl_stick.setText(f"🔌 {label} · {state}")
-        else:
-            self.lbl_stick.setText("Kein Stick zugeordnet")
 
     def _check_volumes(self) -> None:
-        """Offer a newly plugged stick once and keep the volume state current."""
-        marked: list[tuple[str, volumes.VolumeInfo]] = []
-        for root in volumes.mounted_roots():
-            info = volumes.read_marker(root)
-            if info is not None:
-                marked.append((root, info))
-
-        root_now = storage_root(self.config)
-        changed = self._last_root is not None and root_now != self._last_root
-        self._last_root = root_now
-        self._sync_stick_status()
-        self._sync_window_title()
+        """Keep location, window title, sidebar and stick banner in sync."""
+        location = locate(self.config)
+        changed = self._location is not None and location.volume != self._location.volume
+        self._location = location
+        self._sync_window_title(location)
+        self.lbl_stick.setText(
+            "Kein Stick zugeordnet"
+            if not self.config.volume_uuid
+            else f"🔌 {self.config.volume_label or 'Stick'} · "
+            f"{'verbunden' if location.available else 'nicht verbunden'}"
+        )
+        used = {config.volume_uuid for config in self.configs if config.volume_uuid}
+        self.stick_banner.offer(
+            [(root, info) for root, info in volumes.vaults() if info.uuid not in used]
+        )
         if changed:
             self.refresh_data()
 
-        used = {config.volume_uuid for config in self.configs if config.volume_uuid}
-        fresh = [(root, info) for root, info in marked if info.uuid not in used]
-        if not fresh:
-            self._banner_volume = None
-            self.stick_banner.hide()
-            return
-        root, info = fresh[0]
-        self._banner_volume = (root, info)
-        if info.uuid == self._dismissed_volume:
-            return
-        text = (
-            f"🔌 Stick „{info.label or root}“ erkannt ({root}) – noch keiner "
-            "Config zugeordnet."
-        )
-        if self.lbl_stick_banner.text() != text:
-            self.lbl_stick_banner.setText(text)
-        self.stick_banner.show()
-
+    def _sync_window_title(self, location: LibraryRoot) -> None:
+        """Show config, mode and a missing volume in the window title."""
+        suffix = " · KI" if self.config.mode == MODE_AI else ""
+        if self.config.volume_uuid and not location.available:
+            suffix += " · 🔌 Stick nicht verbunden"
+        self.setWindowTitle(f"MediaVault – {self.config.name}{suffix}")
 
     def _update_last_sync_label(self) -> None:
         """Show when the config's folder was last synchronized."""
@@ -747,7 +661,7 @@ class MainWindow(QMainWindow):
 
     def _sync_folder(self) -> None:
         """Scan the config folder in the background and preview new images."""
-        folder = self.config.folder.strip()
+        folder = locate(self.config).folder
         if not folder:
             QMessageBox.information(
                 self,
@@ -765,10 +679,9 @@ class MainWindow(QMainWindow):
         self.btn_sync_folder.setEnabled(False)
         worker = Worker(
             self,
-            find_new_images,
+            partial(find_new_media, image_exts={".png"}, video_exts=()),
             folder=folder,
             known_paths=known,
-            extensions={".png"},
         )
         progress = self._busy_progress("Durchsuche Ordner nach neuen Bildern …")
         worker.finished.connect(lambda: self._show_new_images(worker, progress))
@@ -784,7 +697,7 @@ class MainWindow(QMainWindow):
         if worker.error is not None:
             QMessageBox.warning(self, "Ordner synchronisieren", str(worker.error))
             return
-        paths = [path for path in worker.result if os.path.isfile(path)]
+        paths = [path for path in worker.result[0] if os.path.isfile(path)]
         if not paths:
             self._mark_folder_synced()
             QMessageBox.information(
@@ -1005,7 +918,7 @@ class MainWindow(QMainWindow):
         """
         key = entry.media_path
         if key not in self.thumbnail_cache:
-            image = load_thumbnail(entry, self._root())
+            image = load_thumbnail(entry, locate(self.config).volume)
             self.thumbnail_cache[key] = QPixmap.fromImage(image) if image else None
         return self.thumbnail_cache[key]
 
@@ -1020,7 +933,9 @@ class MainWindow(QMainWindow):
         ]
         if not missing:
             return
-        worker = Worker(self, load_thumbnails, entries=missing, root=self._root())
+        worker = Worker(
+            self, load_thumbnails, entries=missing, root=locate(self.config).volume
+        )
         worker.finished.connect(self._finish_thumbnail_load)
         self._thumb_worker = worker
         self._set_loading(True)
@@ -1403,9 +1318,13 @@ class MainWindow(QMainWindow):
         """Save the current database and open another vault config."""
         self.db.save()
         dlg = ConfigDialog(self, self.configs, self.config.db_path)
-        if not dlg.exec() or dlg.selected_config is None:
+        if not dlg.exec():
             return
-        self._activate_config(dlg.selected_config.db_path)
+        if dlg.wants_stick_setup:
+            self._open_stick()
+            return
+        if dlg.selected_config is not None:
+            self._activate_config(dlg.selected_config.db_path)
 
     def _open_analysis(self) -> None:
         """Open the local prompt statistics for the current config."""
@@ -1420,7 +1339,9 @@ class MainWindow(QMainWindow):
         if len(self.recent_picks) > 2:
             self.recent_picks.pop(0)
 
-        dlg = DetailDialog(self, entry, self.db, self._get_pixmap, root=self._root())
+        dlg = DetailDialog(
+            self, entry, self.db, self._get_pixmap, root=locate(self.config).volume
+        )
         dlg.exec()
         if dlg.edit_requested:
             self._open_edit(entry)
@@ -1434,7 +1355,7 @@ class MainWindow(QMainWindow):
             self.db,
             entry.entry_type,
             entry,
-            root=storage_root(self.config),
+            root=locate(self.config).volume,
         )
         if dlg.exec():
             self.db.save()
@@ -1469,17 +1390,22 @@ class MainWindow(QMainWindow):
         path, _ = OSHelper.pick_file(self, "Datei auswählen", file_filter)
         if not path:
             return
-        copied, skipped = self._copy_into_library([path])
-        if skipped:
+        result = self._copy_into_library([path])
+        if result.skipped:
             QMessageBox.information(
                 self,
                 "Bereits vorhanden",
                 "Dieses Medium liegt bereits im Ordner der Mediathek.",
             )
             return
-        if not copied:
+        if not result.copied:
+            QMessageBox.warning(
+                self,
+                "Kopieren fehlgeschlagen",
+                "Die Datei konnte nicht in den Ordner der Mediathek kopiert werden.",
+            )
             return
-        path = copied[0]
+        path = result.copied[0]
 
         meta: dict[str, Any] = {}
         if self.config.mode == MODE_AI:
@@ -1493,7 +1419,7 @@ class MainWindow(QMainWindow):
                 return
 
         if find_duplicate(
-            self.db, path, type_str, meta, root=storage_root(self.config)
+            self.db, path, type_str, meta, root=locate(self.config).volume
         ):
             QMessageBox.information(
                 self,
@@ -1507,7 +1433,7 @@ class MainWindow(QMainWindow):
             self.db,
             type_str,
             ai_meta=meta,
-            root=storage_root(self.config),
+            root=locate(self.config).volume,
         )
         if type_str == "Bilder":
             dlg.inp_img.setText(path)
@@ -1535,21 +1461,23 @@ class MainWindow(QMainWindow):
             if self.combo_group.currentText() != ALL_GROUPS
             else ""
         )
-        paths, already_there = self._copy_into_library(paths)
+        copied = self._copy_into_library(paths)
         result = import_paths(
             self.db,
-            paths,
+            copied.copied,
             type_str=type_str,
             group=group,
             mode=self.config.mode,
-            root=storage_root(self.config),
+            root=locate(self.config).volume,
         )
         if result.added:
             self.refresh_data()
-        if result.duplicates or result.skipped_no_ai or already_there:
+        if result.duplicates or result.skipped_no_ai or copied.skipped or copied.failed:
             summary = [f"{result.added} importiert", f"{result.duplicates} Duplikate"]
-            if already_there:
-                summary.append(f"{already_there} schon im Ordner")
+            if copied.skipped:
+                summary.append(f"{copied.skipped} schon im Ordner")
+            if copied.failed:
+                summary.append(f"{len(copied.failed)} nicht kopierbar")
             if result.skipped_no_ai:
                 summary.append(f"{result.skipped_no_ai} ohne KI-Metadaten")
             QMessageBox.information(
@@ -1604,19 +1532,22 @@ class MainWindow(QMainWindow):
             self._deselect_all()
             self.refresh_data()
 
-    def _pick_available(self, pool: list[MediaItem], smart: bool) -> MediaItem | None:
+    def _pick_available(
+        self, pool: list[MediaItem], smart: bool, root: str
+    ) -> MediaItem | None:
         """Pick a random entry, retrying while its file is unavailable."""
         for _attempt in range(5):
             chosen = self.db.get_random(pool, smart, self.recent_picks)
             if chosen is None:
                 return None
-            if self._entry_available(chosen):
+            if self._entry_available(chosen, root):
                 return chosen
         return None
 
     def _do_random(self, smart: bool, global_pool: bool) -> None:
         """Pick a random entry (local or global) and open it."""
-        if is_volume_config(self.config) and not self._root():
+        location = locate(self.config)
+        if self.config.volume_uuid and not location.available:
             QMessageBox.warning(
                 self,
                 "Mediathek nicht verbunden",
@@ -1626,7 +1557,7 @@ class MainWindow(QMainWindow):
         pool = (
             self.db.entries if global_pool else self.db.get_by_type(self.current_view)
         )
-        chosen = self._pick_available(pool, smart)
+        chosen = self._pick_available(pool, smart, location.volume)
         if chosen:
             self._open_detail(chosen)
 
@@ -1634,6 +1565,8 @@ class MainWindow(QMainWindow):
         """Open the group random dialog and show the chosen entry."""
         dlg = GroupRandomDialog(self, self.db)
         if dlg.exec() and dlg.result_pool:
-            chosen = self._pick_available(dlg.result_pool, dlg.smart)
+            chosen = self._pick_available(
+                dlg.result_pool, dlg.smart, locate(self.config).volume
+            )
             if chosen:
                 self._open_detail(chosen)

@@ -13,6 +13,13 @@ IMAGE_SIZE = 176
 IMAGE_RADIUS = 10
 
 
+def field_label(text: str) -> QLabel:
+    """Create a muted form label used by the dialogs."""
+    label = QLabel(text)
+    label.setObjectName("FieldLabel")
+    return label
+
+
 def score_tier(score: int) -> str:
     """Map a score to the badge tier used for its color."""
     if score >= 75:

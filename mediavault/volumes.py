@@ -86,14 +86,25 @@ def write_marker(root: str, volume_uuid: str = "", label: str = "") -> VolumeInf
     return info
 
 
+def vaults(
+    roots: Iterable[str] | None = None,
+) -> list[tuple[str, VolumeInfo]]:
+    """Return every connected volume that carries a vault marker."""
+    candidates = list(roots) if roots is not None else mounted_roots()
+    found: list[tuple[str, VolumeInfo]] = []
+    for root in candidates:
+        info = read_marker(root)
+        if info is not None:
+            found.append((root, info))
+    return found
+
+
 def find_volume(volume_uuid: str, roots: Iterable[str] | None = None) -> str:
     """Return the mount point currently carrying volume_uuid, else an empty string."""
     if not volume_uuid:
         return ""
-    candidates = list(roots) if roots is not None else mounted_roots()
-    for root in candidates:
-        info = read_marker(root)
-        if info is not None and info.uuid == volume_uuid:
+    for root, info in vaults(roots):
+        if info.uuid == volume_uuid:
             return root
     return ""
 
@@ -127,15 +138,23 @@ def relative_to_root(path: str, root: str) -> str:
     return relative.replace(os.sep, "/")
 
 
-def resolve(root: str, relative: str) -> str:
-    """Join a stored relative path onto a mount point, refusing escapes."""
-    if not root or not relative:
-        return ""
+def _safe_parts(relative: str) -> list[str] | None:
+    """Split a stored path into parts, or return None when it tries to escape."""
     normalized = relative.replace(chr(92), "/")
     parts = [part for part in normalized.split("/") if part not in ("", ".")]
-    if not parts or any(part == ".." for part in parts):
+    if any(part == ".." for part in parts):
+        return None
+    return parts
+
+
+def folder_path(root: str, relative: str) -> str:
+    """Resolve a stored folder path; an empty value means the root itself."""
+    if not root:
         return ""
-    return os.path.join(root, *parts)
+    parts = _safe_parts(relative)
+    if parts is None:
+        return ""
+    return os.path.join(root, *parts) if parts else root
 
 
 def stored_path(path: str, root: str) -> str:
@@ -150,12 +169,17 @@ def stored_path(path: str, root: str) -> str:
 
 
 def absolute_path(value: str, root: str) -> str:
-    """Turn a stored value into a usable file path."""
+    """Turn a stored file path into a usable absolute path."""
     if not value:
         return ""
     if os.path.isabs(value):
         return value
-    return resolve(root, value)
+    if not root:
+        return ""
+    parts = _safe_parts(value)
+    if not parts:
+        return ""
+    return os.path.join(root, *parts)
 
 
 def path_key(value: str, root: str = "") -> str:

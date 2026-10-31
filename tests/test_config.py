@@ -1,15 +1,19 @@
 import json
+import os
 
 import pytest
 
+from mediavault import volumes
 from mediavault.config import (
     DEFAULT_DB_PATH,
     MODE_AI,
     MODE_NORMAL,
+    LibraryRoot,
     VaultConfig,
     create_config,
-    find_new_images,
+    find_new_media,
     load_configs,
+    locate,
     save_configs,
 )
 
@@ -101,7 +105,7 @@ def test_create_config_makes_unique_paths(tmp_path):
     assert first.mode == MODE_AI
 
 
-def test_find_new_images_recurses_and_skips_known(tmp_path):
+def test_find_new_media_recurses_and_skips_known(tmp_path):
     known = tmp_path / "a.png"
     new_nested = tmp_path / "sub" / "b.JPG"
     ignored = tmp_path / "c.txt"
@@ -109,22 +113,89 @@ def test_find_new_images_recurses_and_skips_known(tmp_path):
     _touch(new_nested)
     _touch(ignored)
 
-    found = find_new_images(str(tmp_path), [str(known)])
+    images, videos = find_new_media(str(tmp_path), [str(known)])
 
-    assert found == [str(new_nested)]
+    assert images == [str(new_nested)]
+    assert videos == []
 
 
-def test_find_new_images_can_limit_to_png(tmp_path):
+def test_find_new_media_splits_images_and_videos(tmp_path):
+    _touch(tmp_path / "a.png")
+    _touch(tmp_path / "sub" / "b.mp4")
+    _touch(tmp_path / "notes.txt")
+
+    images, videos = find_new_media(str(tmp_path), [])
+
+    assert [os.path.basename(path) for path in images] == ["a.png"]
+    assert [os.path.basename(path) for path in videos] == ["b.mp4"]
+
+
+def test_find_new_media_can_limit_the_types(tmp_path):
     _touch(tmp_path / "a.png")
     _touch(tmp_path / "b.jpg")
+    _touch(tmp_path / "c.mp4")
 
-    found = find_new_images(str(tmp_path), [], {".png"})
+    images, videos = find_new_media(
+        str(tmp_path), [], image_exts={".png"}, video_exts=()
+    )
 
-    assert found == [str(tmp_path / "a.png")]
+    assert images == [str(tmp_path / "a.png")]
+    assert videos == []
 
 
-def test_find_new_images_missing_folder_returns_empty(tmp_path):
-    assert find_new_images(str(tmp_path / "nope"), []) == []
+def test_find_new_media_skips_known_relative_paths(tmp_path):
+    _touch(tmp_path / "a.png")
+
+    images, _videos = find_new_media(str(tmp_path), ["a.png"], root=str(tmp_path))
+
+    assert images == []
+
+
+def test_find_new_media_missing_folder_returns_empty(tmp_path):
+    assert find_new_media(str(tmp_path / "nope"), []) == ([], [])
+
+
+def _volume_config(tmp_path, folder_rel="Media"):
+    """Create a config bound to a freshly marked volume."""
+    root = tmp_path / "stick"
+    root.mkdir()
+    info = volumes.write_marker(str(root), label="Stick")
+    config = VaultConfig(
+        name="Stick",
+        db_path="s.json",
+        volume_uuid=info.uuid,
+        volume_label=info.label,
+        folder_rel=folder_rel,
+    )
+    return root, config
+
+
+def test_locate_reports_an_unplugged_volume(monkeypatch, tmp_path):
+    root, config = _volume_config(tmp_path)
+
+    monkeypatch.setattr(volumes, "mounted_roots", list)
+    assert locate(config) == LibraryRoot()
+    assert not locate(config).available
+
+    monkeypatch.setattr(volumes, "mounted_roots", lambda: [str(root)])
+    location = locate(config)
+    assert (location.volume, location.folder) == (str(root), str(root / "Media"))
+    assert location.available
+
+
+def test_locate_treats_an_empty_folder_as_the_volume_root(monkeypatch, tmp_path):
+    root, config = _volume_config(tmp_path, folder_rel="")
+    monkeypatch.setattr(volumes, "mounted_roots", lambda: [str(root)])
+
+    location = locate(config)
+
+    assert (location.volume, location.folder) == (str(root), str(root))
+
+
+def test_locate_keeps_a_local_config_on_its_folder(tmp_path):
+    config = VaultConfig(name="Lokal", db_path="l.json", folder=str(tmp_path))
+
+    assert locate(config) == LibraryRoot(folder=str(tmp_path))
 
 
 def test_folder_last_sync_defaults_and_round_trips(tmp_path):

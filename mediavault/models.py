@@ -11,6 +11,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
+from mediavault import volumes
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,8 +39,24 @@ class MediaItem:
 
     @property
     def media_path(self) -> str:
-        """Primary file path: the preview image if present, else the video."""
+        """Primary stored path: the preview image if present, else the video."""
         return self.image_path or self.video_link
+
+    @property
+    def file_path(self) -> str:
+        """Stored path of the entry's own file, chosen by entry type."""
+        return self.video_link if self.entry_type == "Videos" else self.image_path
+
+    def set_file(self, path: str) -> None:
+        """Store a file path in the field that matches the entry type."""
+        if self.entry_type == "Videos":
+            self.video_link = path
+        else:
+            self.image_path = path
+
+    def resolve(self, root: str) -> str:
+        """Return the entry's file path resolved against a volume root."""
+        return volumes.absolute_path(self.file_path, root)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the entry as a detached dictionary for JSON storage."""

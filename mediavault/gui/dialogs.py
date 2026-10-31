@@ -2,30 +2,25 @@
 
 import os
 import time
-import urllib.parse
 from collections.abc import Callable
 from html import escape
 from typing import Any
 
-from PyQt6.QtCore import QSize, Qt, QThread, QTimer
-from PyQt6.QtGui import QIcon, QPixmap, QTextCursor
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -38,39 +33,13 @@ from mediavault.config import (
     MODE_NORMAL,
     VaultConfig,
     create_config,
-    resolve_folder,
+    locate,
     save_configs,
 )
-from mediavault.gui.widgets import rounded_pixmap
+from mediavault.gui.widgets import field_label, rounded_pixmap
 from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem
-from mediavault.rule34 import Post, fetch_tag_suggestions, split_queries, tag_at
 from mediavault.utils import OSHelper
-
-
-def _field_label(text: str) -> QLabel:
-    """Create a muted form label."""
-    label = QLabel(text)
-    label.setObjectName("FieldLabel")
-    return label
-
-
-class Worker(QThread):
-    """Run one blocking call outside the GUI thread."""
-
-    def __init__(self, parent: QWidget, fn: Callable[..., Any], **kwargs: Any) -> None:
-        super().__init__(parent)
-        self._fn = fn
-        self._kwargs = kwargs
-        self.result: Any = None
-        self.error: Exception | None = None
-
-    def run(self) -> None:
-        """Run the call and store its outcome for the GUI thread."""
-        try:
-            self.result = self._fn(**self._kwargs)
-        except Exception as exc:  # noqa: BLE001 - reported in the GUI thread
-            self.error = exc
 
 
 class DetailDialog(QDialog):
@@ -156,7 +125,7 @@ class DetailDialog(QDialog):
                 value = self.entry.ai_meta.get(key, "")
                 if not value:
                     continue
-                layout.addWidget(_field_label(label))
+                layout.addWidget(field_label(label))
                 box = QTextEdit()
                 box.setReadOnly(True)
                 box.setPlainText(value)
@@ -216,12 +185,7 @@ class DetailDialog(QDialog):
 
     def _play_media(self) -> None:
         """Open the media file and update counters and timestamp."""
-        stored = (
-            self.entry.video_link
-            if self.entry.entry_type == "Videos"
-            else self.entry.image_path
-        )
-        path = volumes.absolute_path(stored, self.root)
+        path = self.entry.resolve(self.root)
         if not path or not os.path.isfile(path):
             QMessageBox.warning(
                 self,
@@ -284,23 +248,23 @@ class EditDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
 
-        layout.addWidget(_field_label("Titel"))
+        layout.addWidget(field_label("Titel"))
         self.inp_title = QLineEdit()
         layout.addWidget(self.inp_title)
 
-        layout.addWidget(_field_label("Gruppe"))
+        layout.addWidget(field_label("Gruppe"))
         self.inp_group = QComboBox()
         self.inp_group.setEditable(True)
         self.inp_group.addItems([""] + self.db.get_all_groups())
         layout.addWidget(self.inp_group)
 
-        layout.addWidget(_field_label("Beschreibung"))
+        layout.addWidget(field_label("Beschreibung"))
         self.inp_desc = QTextEdit()
         self.inp_desc.setFixedHeight(120)
         layout.addWidget(self.inp_desc)
 
         if self.entry_type == "Videos":
-            layout.addWidget(_field_label("Video-Datei"))
+            layout.addWidget(field_label("Video-Datei"))
             video_row = QHBoxLayout()
             video_row.setSpacing(8)
             self.inp_video = QLineEdit()
@@ -311,11 +275,11 @@ class EditDialog(QDialog):
             video_row.addWidget(btn_v)
             layout.addLayout(video_row)
 
-        layout.addWidget(_field_label("Score (1-100)"))
+        layout.addWidget(field_label("Score (1-100)"))
         self.inp_score = QLineEdit("50")
         layout.addWidget(self.inp_score)
 
-        layout.addWidget(_field_label("Vorschaubild"))
+        layout.addWidget(field_label("Vorschaubild"))
         image_row = QHBoxLayout()
         image_row.setSpacing(8)
         self.inp_img = QLineEdit()
@@ -444,7 +408,7 @@ class GroupRandomDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
 
-        layout.addWidget(_field_label("Gruppen"))
+        layout.addWidget(field_label("Gruppen"))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -464,7 +428,7 @@ class GroupRandomDialog(QDialog):
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
-        layout.addWidget(_field_label("Medientyp"))
+        layout.addWidget(field_label("Medientyp"))
         type_row = QHBoxLayout()
         type_row.setSpacing(16)
         self.cb_img = QCheckBox("Bilder")
@@ -534,9 +498,7 @@ class ConfigDialog(QDialog):
         super().__init__(parent)
         self.configs = list(configs)
         self.selected_config: VaultConfig | None = None
-        self._volume_uuid = ""
-        self._volume_label = ""
-        self._folder_rel = ""
+        self.wants_stick_setup = False
         self.setWindowTitle("Config wechseln")
         self.setMinimumSize(520, 560)
         self._build_ui(current_db_path)
@@ -547,12 +509,12 @@ class ConfigDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
 
-        layout.addWidget(_field_label("Bestehende Configs"))
+        layout.addWidget(field_label("Bestehende Configs"))
         self.list_configs = QListWidget()
         for config in self.configs:
             mode = "KI-Bilder" if config.mode == MODE_AI else "Normal"
             if config.volume_uuid:
-                state = "verbunden" if resolve_folder(config) else "nicht verbunden"
+                state = "verbunden" if locate(config).available else "nicht verbunden"
                 location = f"{config.volume_label or 'Stick'} · {state}"
             else:
                 location = config.folder or "kein Ordner"
@@ -569,7 +531,7 @@ class ConfigDialog(QDialog):
         btn_open.clicked.connect(self._open_selected)
         layout.addWidget(btn_open)
 
-        layout.addWidget(_field_label("Neu erstellen"))
+        layout.addWidget(field_label("Neu erstellen"))
         self.inp_name = QLineEdit()
         self.inp_name.setPlaceholderText("Name")
         layout.addWidget(self.inp_name)
@@ -592,14 +554,14 @@ class ConfigDialog(QDialog):
         folder_row.addWidget(btn_folder)
         btn_stick = QPushButton("Vom Stick…")
         btn_stick.setProperty("variant", "secondary")
-        btn_stick.clicked.connect(self._choose_volume)
+        btn_stick.setToolTip("Ordner auf einem Stick als eigene Config einrichten")
+        btn_stick.clicked.connect(self._request_stick_setup)
         folder_row.addWidget(btn_stick)
         layout.addLayout(folder_row)
 
         hint = QLabel(
-            "Ohne Ordner startet die Config leer; Bilder danach einzeln importieren. "
-            "\"Vom Stick\" bindet einen Ordner an die Stick-Identität, damit ein "
-            "anderer Laufwerksbuchstabe nichts kaputt macht."
+            "Ohne Ordner startet die Config leer; Medien danach einzeln importieren. "
+            "\"Vom Stick\" legt die Config direkt auf einem USB-Stick an."
         )
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
@@ -621,42 +583,13 @@ class ConfigDialog(QDialog):
     def _choose_folder(self) -> None:
         """Pick a scan folder for a new config."""
         folder = QFileDialog.getExistingDirectory(self, "Ordner wählen")
-        if not folder:
-            return
-        self._volume_uuid = ""
-        self._volume_label = ""
-        self._folder_rel = ""
-        self.inp_folder.setText(folder)
+        if folder:
+            self.inp_folder.setText(folder)
 
-    def _choose_volume(self) -> None:
-        """Bind a new config to a folder on a removable volume."""
-        folder = QFileDialog.getExistingDirectory(self, "Ordner auf dem Stick wählen")
-        if not folder:
-            return
-        root, info = volumes.volume_for_path(folder)
-        if not root:
-            QMessageBox.warning(
-                self, "Stick", "Der Ordner liegt auf keinem erkannten Laufwerk."
-            )
-            return
-        if info is None:
-            answer = QMessageBox.question(
-                self,
-                "Stick registrieren",
-                "Dieses Laufwerk ist noch nicht als Mediathek registriert.\n\n"
-                f"Es wird die kleine Datei {volumes.MARKER_NAME} im "
-                f"Wurzelverzeichnis {root} angelegt. Damit findet die App den "
-                "Stick auch nach einem Laufwerksbuchstaben-Wechsel wieder.",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            info = volumes.write_marker(
-                root, label=os.path.basename(root.rstrip("\\/")) or root
-            )
-        self._volume_uuid = info.uuid
-        self._volume_label = info.label or root
-        self._folder_rel = volumes.relative_to_root(folder, root)
-        self.inp_folder.setText(f"🔌 {self._volume_label} · /{self._folder_rel}")
+    def _request_stick_setup(self) -> None:
+        """Hand the stick flow over to StickDialog, which owns volume binding."""
+        self.wants_stick_setup = True
+        self.accept()
 
     def _open_selected(self) -> None:
         """Select the highlighted config and remember it as the last one."""
@@ -682,611 +615,19 @@ class ConfigDialog(QDialog):
                 self, "Fehler", "Eine Config mit diesem Namen existiert bereits."
             )
             return
-        folder = "" if self._volume_uuid else self.inp_folder.text().strip()
+        folder = self.inp_folder.text().strip()
         if folder and not os.path.isdir(folder):
             QMessageBox.warning(self, "Fehler", "Der Ordner existiert nicht.")
             return
 
         config = create_config(
-            name,
-            self.combo_mode.currentData(),
-            folder,
-            self.configs,
-            volume_uuid=self._volume_uuid,
-            volume_label=self._volume_label,
-            folder_rel=self._folder_rel,
+            name, self.combo_mode.currentData(), folder, self.configs
         )
         self.configs.append(config)
         save_configs(self.configs, config.db_path)
         self.selected_config = config
+        self.selected_config = config
         self.accept()
-
-class StickDialog(QDialog):
-    """Create a config from a stick folder or bind the active config to one."""
-
-    def __init__(
-        self,
-        parent: QWidget | None,
-        configs: list[VaultConfig],
-        config: VaultConfig,
-    ) -> None:
-        """Initialize the dialog for the currently active config."""
-        super().__init__(parent)
-        self.configs = list(configs)
-        self.config = config
-        self.target_db_path = ""
-        self._roots: list[str] = []
-        self._folder = ""
-        self._volume_uuid = ""
-        self._volume_label = ""
-        self._folder_rel = ""
-        self.setWindowTitle("Stick einrichten")
-        self.setMinimumSize(620, 540)
-        self._build_ui()
-        self._fill_volumes()
-
-    def _build_ui(self) -> None:
-        """Build the drive list, the folder picker and the two actions."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(10)
-
-        intro = QLabel(
-            "Stick einstecken, hier den Medien-Ordner wählen und dann entweder "
-            "eine neue Config anlegen oder die aktive Config auf diesen Ordner "
-            "umstellen. Alles, was du danach von Hand hinzufügst, kopiert die App "
-            "in genau diesen Ordner."
-        )
-        intro.setObjectName("MutedLabel")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-
-        layout.addWidget(_field_label("Laufwerke"))
-        self.list_volumes = QListWidget()
-        self.list_volumes.currentItemChanged.connect(self._on_volume_selected)
-        layout.addWidget(self.list_volumes, 1)
-
-        self.btn_pick = QPushButton("Ordner auf diesem Laufwerk wählen…")
-        self.btn_pick.setProperty("variant", "secondary")
-        self.btn_pick.setEnabled(False)
-        self.btn_pick.clicked.connect(self._choose_folder)
-        layout.addWidget(self.btn_pick)
-
-        self.lbl_folder = QLabel("Noch kein Ordner gewählt.")
-        self.lbl_folder.setObjectName("HintLabel")
-        self.lbl_folder.setWordWrap(True)
-        layout.addWidget(self.lbl_folder)
-
-        layout.addSpacing(6)
-        layout.addWidget(_field_label("Neue Config"))
-        name_row = QHBoxLayout()
-        name_row.setSpacing(8)
-        self.inp_name = QLineEdit()
-        self.inp_name.setPlaceholderText("Name der neuen Config")
-        name_row.addWidget(self.inp_name, 1)
-        self.combo_mode = QComboBox()
-        self.combo_mode.addItem("Normale Medien", MODE_NORMAL)
-        self.combo_mode.addItem("KI-Bilder", MODE_AI)
-        name_row.addWidget(self.combo_mode)
-        layout.addLayout(name_row)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        self.btn_assign = QPushButton("Aktiver Config zuweisen")
-        self.btn_assign.setProperty("variant", "secondary")
-        self.btn_assign.setEnabled(False)
-        self.btn_assign.clicked.connect(self._assign_to_current)
-        self.btn_create = QPushButton("Neue Config anlegen")
-        self.btn_create.setProperty("variant", "primary")
-        self.btn_create.setEnabled(False)
-        self.btn_create.clicked.connect(self._create_new)
-        buttons.addWidget(btn_cancel)
-        buttons.addStretch()
-        buttons.addWidget(self.btn_assign)
-        buttons.addWidget(self.btn_create)
-        layout.addLayout(buttons)
-
-    def _fill_volumes(self) -> None:
-        """List every mounted volume, marking the vault-enabled ones."""
-        self.list_volumes.clear()
-        self._roots = volumes.mounted_roots()
-        preselect = -1
-        for index, root in enumerate(self._roots):
-            info = volumes.read_marker(root)
-            if info is not None:
-                owner = next(
-                    (
-                        item.name
-                        for item in self.configs
-                        if item.volume_uuid == info.uuid
-                    ),
-                    "",
-                )
-                state = f"Config \u201e{owner}\u201c" if owner else "noch nicht zugeordnet"
-                text = f"🔌 {info.label or root} · {root} · {state}"
-                if self.config.volume_uuid and info.uuid == self.config.volume_uuid:
-                    preselect = index
-            else:
-                text = f"💾 {root} · kein Stick"
-            item = QListWidgetItem(text)
-            item.setData(Qt.ItemDataRole.UserRole, root)
-            self.list_volumes.addItem(item)
-
-        if not self._roots:
-            self.lbl_folder.setText(
-                "Kein Laufwerk erkannt. Stick einstecken und den Dialog erneut öffnen."
-            )
-            self.btn_pick.setEnabled(False)
-            return
-        self.btn_pick.setEnabled(True)
-        preselect = max(preselect, 0)
-        self.list_volumes.setCurrentRow(preselect)
-
-    def _on_volume_selected(self, *_args: object) -> None:
-        """Re-enable the folder picker when the selection changes."""
-        self.btn_pick.setEnabled(self.list_volumes.currentItem() is not None)
-
-    def _choose_folder(self) -> None:
-        """Pick a media folder on the selected drive and remember its volume."""
-        item = self.list_volumes.currentItem()
-        if item is None:
-            QMessageBox.information(self, "Stick", "Bitte zuerst ein Laufwerk wählen.")
-            return
-        root = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        folder = QFileDialog.getExistingDirectory(
-            self, "Ordner auf dem Laufwerk wählen", root
-        )
-        if not folder:
-            return
-        actual_root, info = volumes.volume_for_path(folder, self._roots)
-        if not actual_root:
-            QMessageBox.warning(
-                self, "Stick", "Der Ordner liegt auf keinem erkannten Laufwerk."
-            )
-            return
-        if info is None:
-            answer = QMessageBox.question(
-                self,
-                "Stick registrieren",
-                "Dieses Laufwerk ist noch nicht als Mediathek registriert.\n\n"
-                f"Es wird die kleine Datei {volumes.MARKER_NAME} im "
-                f"Wurzelverzeichnis {actual_root} angelegt. Damit findet die App "
-                "den Ordner auch nach einem Laufwerksbuchstaben-Wechsel wieder.",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            info = volumes.write_marker(
-                actual_root, label=os.path.basename(actual_root.rstrip("\\/")) or actual_root
-            )
-            self._fill_volumes()
-
-        self._folder = folder
-        self._volume_uuid = info.uuid
-        self._volume_label = info.label or actual_root
-        self._folder_rel = volumes.relative_to_root(folder, actual_root)
-        self.lbl_folder.setText(f"Ordner: {folder}")
-        if not self.inp_name.text().strip():
-            self.inp_name.setText(os.path.basename(folder.rstrip("\\/")) or "Stick")
-        self.btn_assign.setEnabled(True)
-        self.btn_create.setEnabled(True)
-
-    def _assign_to_current(self) -> None:
-        """Point the active config at the chosen folder."""
-        if not self._volume_uuid:
-            return
-        self.config.volume_uuid = self._volume_uuid
-        self.config.volume_label = self._volume_label
-        self.config.folder_rel = self._folder_rel
-        self.config.folder = ""
-        save_configs(self.configs, self.config.db_path)
-        self.target_db_path = self.config.db_path
-        self.accept()
-
-    def _create_new(self) -> None:
-        """Create a new config bound to the chosen folder."""
-        name = self.inp_name.text().strip()
-        if not name:
-            QMessageBox.warning(self, "Fehler", "Name ist erforderlich.")
-            return
-        if any(item.name.casefold() == name.casefold() for item in self.configs):
-            QMessageBox.warning(
-                self, "Fehler", "Eine Config mit diesem Namen existiert bereits."
-            )
-            return
-        if not self._volume_uuid:
-            QMessageBox.warning(self, "Fehler", "Bitte zuerst einen Ordner wählen.")
-            return
-        config = create_config(
-            name,
-            self.combo_mode.currentData(),
-            "",
-            self.configs,
-            volume_uuid=self._volume_uuid,
-            volume_label=self._volume_label,
-            folder_rel=self._folder_rel,
-        )
-        self.configs.append(config)
-        save_configs(self.configs, config.db_path)
-        self.target_db_path = config.db_path
-        self.accept()
-
-
-
-class Rule34Dialog(QDialog):
-    """Collect rule34 credentials and search settings for the active config."""
-
-    def __init__(
-        self, parent: QWidget | None, config: VaultConfig, configs: list[VaultConfig]
-    ) -> None:
-        """Initialize the form from the config's saved values."""
-        super().__init__(parent)
-        self.setWindowTitle("rule34.xxx Import")
-        self.setMinimumWidth(480)
-        self.config = config
-        self.configs = configs
-        self._suggest_worker: Worker | None = None
-        self._suggest_word = ""
-        self._suggest_range = (0, 0)
-        self._suggest_pending = False
-        self._build_ui(config)
-
-    def _build_ui(self, config: VaultConfig) -> None:
-        """Build the credential, tag and download settings form."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(8)
-
-        layout.addWidget(_field_label("Zugangsdaten einfügen"))
-        self.inp_credentials = QLineEdit()
-        self.inp_credentials.setPlaceholderText(
-            "&api_key=…&user_id=… oder komplette URL einfügen"
-        )
-        self.inp_credentials.textChanged.connect(self._apply_credentials)
-        layout.addWidget(self.inp_credentials)
-
-        layout.addWidget(_field_label("API-Key"))
-        self.inp_key = QLineEdit(config.rule34_api_key)
-        self.inp_key.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.inp_key)
-
-        layout.addWidget(_field_label("User-ID"))
-        self.inp_user = QLineEdit(config.rule34_user_id)
-        layout.addWidget(self.inp_user)
-
-        layout.addWidget(_field_label("Tags / Charaktere (eine Suche pro Zeile)"))
-        self.inp_tags = QPlainTextEdit(config.rule34_tags)
-        self.inp_tags.setPlaceholderText(
-            "z. B. character_name other_tag\noder eine Suche pro Zeile"
-        )
-        self.inp_tags.setFixedHeight(90)
-        self.inp_tags.setTabChangesFocus(True)
-        self.inp_tags.textChanged.connect(self._schedule_suggestions)
-        self.inp_tags.cursorPositionChanged.connect(self._schedule_suggestions)
-        layout.addWidget(self.inp_tags)
-
-        self.lst_tags = QListWidget()
-        self.lst_tags.setMaximumHeight(110)
-        self.lst_tags.setVisible(False)
-        self.lst_tags.itemClicked.connect(self._apply_suggestion)
-        self.lst_tags.itemActivated.connect(self._apply_suggestion)
-        layout.addWidget(self.lst_tags)
-
-        saved_row = QHBoxLayout()
-        self.combo_saved_tags = QComboBox()
-        self.combo_saved_tags.activated.connect(self._load_saved_tags)
-        btn_save_tags = QPushButton("Tags speichern")
-        btn_save_tags.setProperty("variant", "ghost")
-        btn_save_tags.clicked.connect(self._save_saved_tags)
-        btn_delete_tags = QPushButton("Löschen")
-        btn_delete_tags.setProperty("variant", "ghost")
-        btn_delete_tags.clicked.connect(self._delete_saved_tags)
-        saved_row.addWidget(self.combo_saved_tags, 1)
-        saved_row.addWidget(btn_save_tags)
-        saved_row.addWidget(btn_delete_tags)
-        layout.addLayout(saved_row)
-        self._refresh_saved_tags()
-
-        self._suggest_timer = QTimer(self)
-        self._suggest_timer.setSingleShot(True)
-        self._suggest_timer.setInterval(350)
-        self._suggest_timer.timeout.connect(self._request_suggestions)
-
-        layout.addWidget(_field_label("Anzahl der neuesten Posts"))
-        self.spin_count = QSpinBox()
-        self.spin_count.setRange(1, 200)
-        self.spin_count.setValue(config.rule34_count)
-        layout.addWidget(self.spin_count)
-
-        self.chk_webm = QCheckBox("Nur Videos (webm)")
-        self.chk_webm.setChecked(config.rule34_webm)
-        layout.addWidget(self.chk_webm)
-
-        self.chk_reset = QCheckBox("Cache zurücksetzen (neueste Posts erneut holen)")
-        self.chk_reset.setToolTip(
-            "Ignoriert die zuletzt importierte ID. Bereits vorhandene Dateien "
-            "werden trotzdem übersprungen."
-        )
-        layout.addWidget(self.chk_reset)
-
-        hint = QLabel(
-            "Key und User-ID stehen unter rule34.xxx → Account options → "
-            "API Access Credentials; du kannst beide auch zusammen in das "
-            "obere Feld einfügen. Beides wird im Klartext in configs.json "
-            "gespeichert. Eine Suche pro Zeile; die Anzahl gilt pro Zeile. "
-            "Eigene sort:-Tags werden ignoriert; die neuesten IDs kommen zuerst."
-        )
-        hint.setObjectName("MutedLabel")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_start = QPushButton("Importieren")
-        btn_start.setProperty("variant", "primary")
-        btn_start.clicked.connect(self._accept)
-        buttons.addWidget(btn_cancel)
-        buttons.addWidget(btn_start)
-        layout.addLayout(buttons)
-
-    def _apply_credentials(self, text: str) -> None:
-        """Fill key and user ID from a pasted parameter string or URL."""
-        query = urllib.parse.urlsplit(text.strip()).query or text.strip().lstrip("&")
-        values = urllib.parse.parse_qs(query)
-        if values.get("api_key"):
-            self.inp_key.setText(values["api_key"][0])
-        if values.get("user_id"):
-            self.inp_user.setText(values["user_id"][0])
-
-    def _schedule_suggestions(self) -> None:
-        """Restart the debounce timer for tag suggestions."""
-        self._suggest_timer.start()
-
-    def _request_suggestions(self) -> None:
-        """Ask rule34 for tags matching the word at the cursor."""
-        if self._suggest_worker is not None:
-            self._suggest_pending = True
-            return
-        word, start, end = tag_at(
-            self.inp_tags.toPlainText(), self.inp_tags.textCursor().position()
-        )
-        if len(word) < 2 or ":" in word:
-            self._hide_suggestions()
-            return
-        self._suggest_word = word
-        self._suggest_range = (start, end)
-        self._suggest_worker = Worker(self, fetch_tag_suggestions, prefix=word)
-        self._suggest_worker.finished.connect(self._on_suggestions)
-        self._suggest_worker.start()
-
-    def _on_suggestions(self) -> None:
-        """Show suggestions if the requested word is still current."""
-        worker = self._suggest_worker
-        self._suggest_worker = None
-        if worker is not None:
-            names = worker.result if worker.error is None else []
-            start, end = self._suggest_range
-            if names and self.inp_tags.toPlainText()[start:end] == self._suggest_word:
-                self._show_suggestions(names)
-            else:
-                self._hide_suggestions()
-        if self._suggest_pending:
-            self._suggest_pending = False
-            self._suggest_timer.start()
-
-    def _show_suggestions(self, names: list[str]) -> None:
-        """Fill and show the suggestion list."""
-        self.lst_tags.clear()
-        self.lst_tags.addItems(names)
-        self.lst_tags.setVisible(True)
-
-    def _hide_suggestions(self) -> None:
-        """Hide and empty the suggestion list."""
-        self.lst_tags.clear()
-        self.lst_tags.setVisible(False)
-
-    def _apply_suggestion(self, item: QListWidgetItem) -> None:
-        """Replace the current word with the clicked suggestion."""
-        start, end = self._suggest_range
-        if self.inp_tags.toPlainText()[start:end] != self._suggest_word:
-            self._hide_suggestions()
-            return
-        cursor = self.inp_tags.textCursor()
-        cursor.setPosition(start)
-        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        cursor.insertText(item.text() + " ")
-        self.inp_tags.setTextCursor(cursor)
-        self.inp_tags.setFocus()
-        self._suggest_word = ""
-        self._hide_suggestions()
-
-    def _refresh_saved_tags(self, selected: str | None = None) -> None:
-        """Rebuild the preset list and optionally select one entry."""
-        self.combo_saved_tags.clear()
-        self.combo_saved_tags.addItem("Gespeicherte Tag-Configs …", "")
-        for name in sorted(self.config.rule34_saved_tags, key=str.casefold):
-            self.combo_saved_tags.addItem(name, name)
-        if selected:
-            self.combo_saved_tags.setCurrentIndex(
-                max(self.combo_saved_tags.findData(selected), 0)
-            )
-
-    def _load_saved_tags(self) -> None:
-        """Replace the tag field with the selected saved preset."""
-        name = self.combo_saved_tags.currentData()
-        if name:
-            self.inp_tags.setPlainText(self.config.rule34_saved_tags[name])
-
-    def _save_saved_tags(self) -> None:
-        """Store the current tag text under a name the user chooses."""
-        text = "\n".join(split_queries(self.inp_tags.toPlainText()))
-        if not text:
-            QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
-            return
-        name, ok = QInputDialog.getText(
-            self, "Tags speichern", "Name für diese Tag-Config:", text=text.splitlines()[0]
-        )
-        name = name.strip()
-        if not ok or not name:
-            return
-        # An existing name is overwritten on purpose: that is how a preset
-        # gets updated after the user changed the tags.
-        self.config.rule34_saved_tags[name] = text
-        save_configs(self.configs, self.config.db_path)
-        self._refresh_saved_tags(name)
-
-    def _delete_saved_tags(self) -> None:
-        """Remove the selected preset after confirmation."""
-        name = self.combo_saved_tags.currentData()
-        if not name:
-            return
-        answer = QMessageBox.question(
-            self, "Tags löschen", f"Gespeicherte Tags „{name}“ löschen?"
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self.config.rule34_saved_tags.pop(name, None)
-        save_configs(self.configs, self.config.db_path)
-        self._refresh_saved_tags()
-
-    def done(self, result: int) -> None:
-        """Stop the suggestion timer and worker before the dialog closes."""
-        self._suggest_timer.stop()
-        worker = self._suggest_worker
-        self._suggest_worker = None
-        if worker is not None:
-            worker.finished.disconnect(self._on_suggestions)
-            worker.wait()
-        super().done(result)
-
-    def _accept(self) -> None:
-        """Validate the required fields before closing."""
-        if not self.inp_key.text().strip():
-            QMessageBox.warning(self, "Fehler", "API-Key ist erforderlich.")
-            return
-        if not self.inp_user.text().strip():
-            QMessageBox.warning(self, "Fehler", "User-ID ist erforderlich.")
-            return
-        if not split_queries(self.inp_tags.toPlainText()):
-            QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
-            return
-        self.accept()
-
-    def settings(self) -> dict[str, Any]:
-        """Return the entered settings as config field values."""
-        return {
-            "rule34_api_key": self.inp_key.text().strip(),
-            "rule34_user_id": self.inp_user.text().strip(),
-            "rule34_tags": "\n".join(split_queries(self.inp_tags.toPlainText())),
-            "rule34_count": self.spin_count.value(),
-            "rule34_webm": self.chk_webm.isChecked(),
-        }
-
-
-class Rule34PreviewDialog(QDialog):
-    """Show fetched posts and let the user pick which ones to download."""
-
-    COLUMNS = 4
-    THUMB = 160
-
-    def __init__(
-        self,
-        parent: QWidget | None,
-        posts: list[Post],
-        previews: dict[int, bytes],
-    ) -> None:
-        """Initialize the preview grid from fetched posts and thumbnails."""
-        super().__init__(parent)
-        self.setWindowTitle("rule34.xxx – Posts auswählen")
-        self.resize(900, 700)
-        self._boxes: dict[int, QCheckBox] = {}
-        self._build_ui(posts, previews)
-
-    def _build_ui(self, posts: list[Post], previews: dict[int, bytes]) -> None:
-        """Build the selection toolbar, image grid and dialog buttons."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
-
-        toolbar = QHBoxLayout()
-        btn_all = QPushButton("Alle auswählen")
-        btn_none = QPushButton("Keine")
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        toolbar.addWidget(btn_all)
-        toolbar.addWidget(btn_none)
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        grid = QGridLayout(content)
-        for index, post in enumerate(posts):
-            grid.addWidget(
-                self._item(post, previews.get(post.id)),
-                index // self.COLUMNS,
-                index % self.COLUMNS,
-            )
-        grid.setRowStretch(grid.rowCount(), 1)
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_start = QPushButton("Auswahl importieren")
-        btn_start.setProperty("variant", "primary")
-        btn_start.clicked.connect(self.accept)
-        buttons.addWidget(btn_cancel)
-        buttons.addWidget(btn_start)
-        layout.addLayout(buttons)
-
-    def _item(self, post: Post, data: bytes | None) -> QWidget:
-        """Build one thumbnail with its selection checkbox."""
-        label = QLabel()
-        label.setFixedSize(self.THUMB, self.THUMB)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pixmap = QPixmap()
-        if data and pixmap.loadFromData(data):
-            label.setPixmap(
-                pixmap.scaled(
-                    self.THUMB,
-                    self.THUMB,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-        else:
-            label.setText("keine Vorschau")
-
-        box = QCheckBox(f"#{post.id}")
-        box.setChecked(True)
-        box.setToolTip(post.group)
-        self._boxes[post.id] = box
-
-        item = QWidget()
-        column = QVBoxLayout(item)
-        column.setContentsMargins(4, 4, 4, 4)
-        column.addWidget(label)
-        column.addWidget(box)
-        return item
-
-    def _set_all(self, checked: bool) -> None:
-        """Check or uncheck every post."""
-        for box in self._boxes.values():
-            box.setChecked(checked)
-
-    def selected_ids(self) -> set[int]:
-        """Return the IDs of the checked posts."""
-        return {post_id for post_id, box in self._boxes.items() if box.isChecked()}
 
 
 class FolderPreviewDialog(QDialog):
