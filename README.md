@@ -2,7 +2,7 @@
 
 Ein Desktop-Tool zum Verwalten, Bewerten und Durchstöbern von Medien (Bilder und Videos) – mit Bewertungssystem, Zufallsauswahl und Batch-Funktionen.
 
-![MediaVault-Hauptfenster im dunklen Theme mit Bildkacheln, Scores und Gruppen](docs/screenshots/main_window.png)
+![MediaVault-Hauptfenster im dunklen Theme mit Seitenleiste, Bildkacheln, Scores und Gruppen](docs/screenshots/main_window.png)
 
 ## Überblick
 
@@ -59,7 +59,7 @@ mediavault/
     ├── sidebar.py     # Seitenleiste mit Navigation und Statusanzeigen
     ├── card_grid.py   # Kachelraster, Auswahl, Vorschau-Cache
     ├── selection.py   # Auswahlrechteck mit Auto-Scroll
-    ├── widgets.py     # Medienkacheln
+    ├── widgets.py     # Medienkacheln, Button- und Label-Helfer
     ├── collapsible.py # Einklappbare Seitenleisten-Sektion
     ├── folder_sync.py # Ordner-Sync mit Vorschau und Import
     ├── rule34_import.py # rule34: Posts holen, auswählen, einreihen

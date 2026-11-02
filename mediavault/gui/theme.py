@@ -16,7 +16,6 @@ FONT_FAMILIES = ("Segoe UI", "Noto Sans", "Ubuntu", "Cantarell", "DejaVu Sans")
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
         "bg": "#1f2228",
-        "sidebar_bg": "#16181c",
         "surface": "#272b33",
         "surface_alt": "#2e333e",
         "hover": "#363d4b",
@@ -42,7 +41,6 @@ PALETTES: dict[str, dict[str, str]] = {
     },
     "light": {
         "bg": "#f4f6fa",
-        "sidebar_bg": "#f4f6fa",
         "surface": "#ffffff",
         "surface_alt": "#eef1f6",
         "hover": "#e8ecf2",
@@ -97,7 +95,7 @@ QWidget {
 }
 
 QWidget#Sidebar {
-    background-color: $sidebar_bg;
+    background-color: $surface;
     border-right: 1px solid $border;
 }
 
