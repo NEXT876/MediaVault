@@ -24,11 +24,6 @@ def open_file(path: str) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
 
 
-def _linux_dialog_available() -> bool:
-    """Return whether kdialog or zenity is available."""
-    return bool(shutil.which("kdialog") or shutil.which("zenity"))
-
-
 def _filter_patterns(file_filter: str) -> str:
     """Extract the glob patterns from the first filter group.
 
@@ -44,7 +39,8 @@ def _native_pick(
     multiple: bool, title: str, file_filter: str, start_dir: str
 ) -> list[str] | None:
     """Run the native Linux picker, or return ``None`` to use Qt instead."""
-    if sys.platform != "linux" or not _linux_dialog_available():
+    has_picker = shutil.which("kdialog") or shutil.which("zenity")
+    if sys.platform != "linux" or not has_picker:
         return None
 
     patterns = _filter_patterns(file_filter)

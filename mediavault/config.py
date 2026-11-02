@@ -12,10 +12,9 @@ from mediavault import volumes
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = os.path.join(
-    os.path.expanduser("~"), ".mediavault", "media_data.json"
-)
-CONFIGS_PATH = os.path.join(os.path.expanduser("~"), ".mediavault", "configs.json")
+APP_DIR = os.path.join(os.path.expanduser("~"), ".mediavault")
+DEFAULT_DB_PATH = os.path.join(APP_DIR, "media_data.json")
+CONFIGS_PATH = os.path.join(APP_DIR, "configs.json")
 MODE_NORMAL = "normal"
 MODE_AI = "ai"
 
@@ -43,7 +42,7 @@ class Rule34Settings:
             api_key=str(get("api_key") or ""),
             user_id=str(get("user_id") or ""),
             tags=str(get("tags") or ""),
-            count=_int_setting(get("count"), 10, 1, 1000),
+            count=int_setting(get("count"), 10, 1, 1000),
             webm=_bool_setting(get("webm")),
             last_ids=_last_ids(get("last_ids")),
             saved_tags=_saved_tags(get("saved_tags")),
@@ -103,7 +102,7 @@ class VaultConfig:
         )
 
 
-def _int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
+def int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
     """Return an integer setting clamped to a valid range."""
     try:
         number = int(value)
@@ -159,24 +158,20 @@ def _default_config() -> VaultConfig:
 
 def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
     """Load configs and the db_path of the last used one."""
-    if not os.path.exists(path):
-        config = _default_config()
-        return [config], config.db_path
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        logger.warning("Configs konnten nicht gelesen werden: %s", path)
-        config = _default_config()
-        return [config], config.db_path
+    data: Any = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            logger.warning("Configs konnten nicht gelesen werden: %s", path)
 
     items = data.get("configs", []) if isinstance(data, dict) else []
     if not isinstance(items, list) or not all(
         isinstance(item, dict) for item in items
     ):
         logger.warning("Configs haben ein unerwartetes Format: %s", path)
-        config = _default_config()
-        return [config], config.db_path
+        items = []
     configs = [VaultConfig.from_dict(item) for item in items]
     if not configs:
         config = _default_config()
@@ -222,7 +217,7 @@ def create_config(
     folder_rel: str = "",
 ) -> VaultConfig:
     """Create a config with a unique database path, without saving it."""
-    base_dir = base_dir or os.path.join(os.path.expanduser("~"), ".mediavault", "data")
+    base_dir = base_dir or os.path.join(APP_DIR, "data")
     used = {config.db_path for config in existing}
     slug = candidate = _slug(name)
     index = 2

@@ -49,6 +49,7 @@ from PyQt6.QtWidgets import (
 
 from mediavault.gui.dialogs import GroupPickDialog
 from mediavault.gui.theme import WHEEL_SLICE_COLORS
+from mediavault.gui.widgets import button
 from mediavault.wheel_configs import (
     WHEEL_CONFIGS_PATH,
     load_wheel_configs,
@@ -533,10 +534,12 @@ class WheelPage(QWidget):
         section.setObjectName("FieldLabel")
         header.addWidget(section)
         header.addStretch(1)
-        self.clear_button = QPushButton("Leeren")
-        self.clear_button.setProperty("variant", "ghost")
-        self.clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clear_button.setToolTip("Alle Einträge entfernen")
+        self.clear_button = button(
+            "Leeren",
+            "ghost",
+            tooltip="Alle Einträge entfernen",
+            cursor=True,
+        )
         header.addWidget(self.clear_button)
         layout.addLayout(header)
         layout.addSpacing(8)
@@ -551,8 +554,8 @@ class WheelPage(QWidget):
             "Speichern", "Aktuelle Einträge als Config speichern"
         )
         self.delete_button = self._small_button("Löschen", "Gewählte Config löschen")
-        for button in (self.apply_button, self.save_button, self.delete_button):
-            config_row.addWidget(button)
+        for btn in (self.apply_button, self.save_button, self.delete_button):
+            config_row.addWidget(btn)
         layout.addLayout(config_row)
         layout.addSpacing(6)
         group_row = QHBoxLayout()
@@ -613,20 +616,14 @@ class WheelPage(QWidget):
         layout.addWidget(result_card)
         layout.addSpacing(14)
 
-        self.spin_button = QPushButton("Drehen")
-        self.spin_button.setProperty("variant", "primary")
-        self.spin_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spin_button = button("Drehen", "primary", cursor=True)
         self.spin_button.setFixedHeight(44)
         layout.addWidget(self.spin_button)
         return panel
 
     @staticmethod
     def _small_button(text: str, tooltip: str) -> QPushButton:
-        button = QPushButton(text)
-        button.setProperty("variant", "secondary")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setToolTip(tooltip)
-        return button
+        return button(text, "secondary", tooltip=tooltip, cursor=True)
 
     # --- Configs ---
     def _current_entries(self) -> list[str]:
@@ -740,19 +737,16 @@ class WheelPage(QWidget):
     # --- Groups ---
     def load_all_groups(self) -> None:
         """Put every group of the active library on the wheel."""
-        self._load_groups(self._available_groups())
+        self._load_groups(list(self._group_provider()))
 
     def pick_groups(self) -> None:
         """Let the user choose groups and put them on the wheel."""
-        groups = self._available_groups()
+        groups = list(self._group_provider())
         if not groups:
             return self._load_groups(groups)
         dialog = GroupPickDialog(self, groups)
         if dialog.exec():
             self._load_groups(dialog.selected_groups)
-
-    def _available_groups(self) -> list[str]:
-        return list(self._group_provider())
 
     def _load_groups(self, groups: list[str]) -> None:
         if not groups:
@@ -791,7 +785,7 @@ class WheelPage(QWidget):
 
     def _set_editing_enabled(self, enabled: bool) -> None:
         """Lock the controls that replace entries while the wheel turns."""
-        for button in (
+        for btn in (
             self.apply_button,
             self.save_button,
             self.delete_button,
@@ -799,7 +793,7 @@ class WheelPage(QWidget):
             self.pick_groups_button,
             self.clear_button,
         ):
-            button.setEnabled(enabled)
+            btn.setEnabled(enabled)
         self.editor.setReadOnly(not enabled)
         if enabled:
             self._refresh_config_combo(select=self.combo_config.currentData())

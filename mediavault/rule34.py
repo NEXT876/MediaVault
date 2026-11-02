@@ -1,5 +1,6 @@
 """rule34.xxx API client, downloader and importer (without Qt)."""
 
+import contextlib
 import http.client
 import json
 import os
@@ -10,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from mediavault.config import MODE_NORMAL
+from mediavault.config import APP_DIR, MODE_NORMAL, int_setting
 from mediavault.importer import import_paths
 from mediavault.models import MediaDatabase, MediaType
 from mediavault.scanner import is_video
@@ -21,6 +22,7 @@ USER_AGENT = "MediaVault/1.0"
 _MAX_LIMIT = 1000
 _CHUNK = 1024 * 1024
 _SUGGESTION_TIMEOUT = 5
+_NET_ERRORS = (OSError, ValueError, http.client.HTTPException)
 
 
 class Rule34Error(Exception):
@@ -54,11 +56,12 @@ def _normalized_tags(tags: str) -> str:
 
 def _clamp_limit(limit: int) -> int:
     """Clamp a post count to the range the API accepts."""
-    try:
-        number = int(limit)
-    except (TypeError, ValueError):
-        number = 10
-    return min(max(number, 1), _MAX_LIMIT)
+    return int_setting(limit, 10, 1, _MAX_LIMIT)
+
+
+def _request(url: str) -> urllib.request.Request:
+    """Return a request for url that identifies MediaVault."""
+    return urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
 
 
 def split_queries(text: str) -> list[str]:
@@ -101,26 +104,20 @@ def fetch_tag_suggestions(
     if len(prefix) < 2 or ":" in prefix:
         return []
     params = urllib.parse.urlencode({"q": prefix})
-    request = urllib.request.Request(
-        f"{AUTOCOMPLETE_URL}?{params}",
-        headers={"User-Agent": USER_AGENT},
-    )
+    request = _request(f"{AUTOCOMPLETE_URL}?{params}")
     try:
         with opener(request, timeout=_SUGGESTION_TIMEOUT) as response:
             payload = json.load(response)
-    except (OSError, ValueError, http.client.HTTPException):
+    except _NET_ERRORS:
         return []
     if not isinstance(payload, list):
         return []
-
-    names: list[str] = []
-    for item in payload:
-        if not isinstance(item, Mapping):
-            continue
-        name = str(item.get("value") or "").strip()
-        if name and name not in names:
-            names.append(name)
-    return names[: _clamp_limit(limit)]
+    names = (
+        str(item.get("value") or "").strip()
+        for item in payload
+        if isinstance(item, Mapping)
+    )
+    return list(dict.fromkeys(name for name in names if name))[: _clamp_limit(limit)]
 
 
 def query_signature(tags: str, webm: bool) -> str:
@@ -197,14 +194,11 @@ def fetch_posts(
         "api_key": api_key,
         "user_id": user_id,
     }
-    request = urllib.request.Request(
-        f"{API_URL}?{urllib.parse.urlencode(params)}",
-        headers={"User-Agent": USER_AGENT},
-    )
+    request = _request(f"{API_URL}?{urllib.parse.urlencode(params)}")
     try:
         with opener(request, timeout=30) as response:
             payload = json.load(response)
-    except (OSError, ValueError, http.client.HTTPException):
+    except _NET_ERRORS:
         # Never surface the request URL, which contains the API key.
         raise Rule34Error("rule34 ist nicht erreichbar.") from None
     return parse_posts(payload)
@@ -287,11 +281,10 @@ def fetch_preview(
     """Return the thumbnail bytes for one post, or None if unavailable."""
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
         return None
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with opener(request, timeout=30) as response:
+        with opener(_request(url), timeout=30) as response:
             return response.read()
-    except (OSError, ValueError, http.client.HTTPException):
+    except _NET_ERRORS:
         return None
 
 
@@ -321,7 +314,7 @@ def download_dir(config_folder: str) -> str:
     """Return the download folder for a config."""
     if config_folder.strip():
         return os.path.join(config_folder, "rule34")
-    return os.path.join(os.path.expanduser("~"), ".mediavault", "downloads")
+    return os.path.join(APP_DIR, "downloads")
 
 
 def _target_path(post: Post, folder: str) -> str:
@@ -349,9 +342,7 @@ def download_post(
     if os.path.isfile(destination) and os.path.getsize(destination) > 0:
         return destination
 
-    request = urllib.request.Request(
-        post.file_url, headers={"User-Agent": USER_AGENT}
-    )
+    request = _request(post.file_url)
     part_path = destination + ".part"
     try:
         with opener(request, timeout=30) as response, open(part_path, "wb") as out:
@@ -359,10 +350,8 @@ def download_post(
                 out.write(chunk)
         os.replace(part_path, destination)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(part_path)
-        except OSError:
-            pass
         raise
     return destination
 
@@ -401,7 +390,7 @@ def download_and_import(
     for number, post in enumerate(targets, 1):
         try:
             path = download_post(post, destination, opener=opener)
-        except (OSError, ValueError, http.client.HTTPException, Rule34Error) as exc:
+        except (*_NET_ERRORS, Rule34Error) as exc:
             # One broken download must not abort the rest of the run.
             detail = str(exc) if isinstance(exc, Rule34Error) else type(exc).__name__
             result.failed.append(f"Post {post.id}: {detail}")

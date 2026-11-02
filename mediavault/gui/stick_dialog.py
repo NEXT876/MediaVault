@@ -8,12 +8,10 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -26,7 +24,7 @@ from mediavault.config import (
     create_config,
     save_configs,
 )
-from mediavault.gui.widgets import field_label
+from mediavault.gui.widgets import button, field_label, hint_label
 
 
 class StickDialog(QDialog):
@@ -46,7 +44,6 @@ class StickDialog(QDialog):
         # Volume root whose existing absolute entries should become relative.
         self.migrate_root = ""
         self._roots: list[str] = []
-        self._folder = ""
         self._mount = ""
         self._volume_uuid = ""
         self._volume_label = ""
@@ -62,14 +59,13 @@ class StickDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
 
-        intro = QLabel(
+        intro = hint_label(
             "Stick einstecken, hier den Medien-Ordner wählen und dann entweder "
             "eine neue Config anlegen oder die aktive Config auf diesen Ordner "
             "umstellen. Alles, was du danach von Hand hinzufügst, kopiert die App "
-            "in genau diesen Ordner."
+            "in genau diesen Ordner.",
+            "MutedLabel",
         )
-        intro.setObjectName("MutedLabel")
-        intro.setWordWrap(True)
         layout.addWidget(intro)
 
         layout.addWidget(field_label("Laufwerke"))
@@ -77,15 +73,15 @@ class StickDialog(QDialog):
         self.list_volumes.currentItemChanged.connect(self._on_volume_selected)
         layout.addWidget(self.list_volumes, 1)
 
-        self.btn_pick = QPushButton("Ordner auf diesem Laufwerk wählen…")
-        self.btn_pick.setProperty("variant", "secondary")
+        self.btn_pick = button(
+            "Ordner auf diesem Laufwerk wählen…",
+            "secondary",
+            self._choose_folder,
+        )
         self.btn_pick.setEnabled(False)
-        self.btn_pick.clicked.connect(self._choose_folder)
         layout.addWidget(self.btn_pick)
 
-        self.lbl_folder = QLabel("Noch kein Ordner gewählt.")
-        self.lbl_folder.setObjectName("HintLabel")
-        self.lbl_folder.setWordWrap(True)
+        self.lbl_folder = hint_label("Noch kein Ordner gewählt.")
         layout.addWidget(self.lbl_folder)
 
         layout.addSpacing(6)
@@ -103,17 +99,15 @@ class StickDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        self.btn_assign = QPushButton("Aktiver Config zuweisen")
-        self.btn_assign.setProperty("variant", "secondary")
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        self.btn_assign = button(
+            "Aktiver Config zuweisen",
+            "secondary",
+            self._assign_to_current,
+        )
         self.btn_assign.setEnabled(False)
-        self.btn_assign.clicked.connect(self._assign_to_current)
-        self.btn_create = QPushButton("Neue Config anlegen")
-        self.btn_create.setProperty("variant", "primary")
+        self.btn_create = button("Neue Config anlegen", "primary", self._create_new)
         self.btn_create.setEnabled(False)
-        self.btn_create.clicked.connect(self._create_new)
         buttons.addWidget(btn_cancel)
         buttons.addStretch()
         buttons.addWidget(self.btn_assign)
@@ -128,14 +122,8 @@ class StickDialog(QDialog):
         for index, root in enumerate(self._roots):
             info = volumes.read_marker(root)
             if info is not None:
-                owner = next(
-                    (
-                        item.name
-                        for item in self.configs
-                        if item.volume_uuid == info.uuid
-                    ),
-                    "",
-                )
+                owners = (c.name for c in self.configs if c.volume_uuid == info.uuid)
+                owner = next(owners, "")
                 state = f"Config \u201e{owner}\u201c" if owner else "noch nicht zugeordnet"
                 text = f"🔌 {info.label or root} · {root} · {state}"
                 if self.config.volume_uuid and info.uuid == self.config.volume_uuid:
@@ -196,7 +184,6 @@ class StickDialog(QDialog):
             if actual_root in self._roots:
                 self.list_volumes.setCurrentRow(self._roots.index(actual_root))
 
-        self._folder = folder
         self._mount = actual_root
         self._volume_uuid = info.uuid
         self._volume_label = info.label or actual_root

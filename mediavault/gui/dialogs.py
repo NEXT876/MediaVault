@@ -3,6 +3,7 @@
 import os
 import time
 from collections.abc import Callable
+from functools import partial
 from html import escape
 from typing import Any
 
@@ -19,7 +20,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
     QScrollArea,
     QTextEdit,
     QVBoxLayout,
@@ -37,7 +37,7 @@ from mediavault.config import (
     save_configs,
 )
 from mediavault.gui import file_dialogs
-from mediavault.gui.widgets import field_label, rounded_pixmap
+from mediavault.gui.widgets import button, field_label, hint_label, rounded_pixmap
 from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem, MediaType
 
@@ -95,10 +95,12 @@ class DetailDialog(QDialog):
         layout.addWidget(grp_lbl)
 
         if self.entry.file_path:
-            btn_play = QPushButton("▶  Abspielen / Öffnen")
-            btn_play.setProperty("variant", "primary")
-            btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_play.clicked.connect(self._play_media)
+            btn_play = button(
+                "▶  Abspielen / Öffnen",
+                "primary",
+                self._play_media,
+                cursor=True,
+            )
             layout.addWidget(btn_play)
 
         if self.entry.description:
@@ -111,9 +113,7 @@ class DetailDialog(QDialog):
         if self.entry.ai_meta:
             summary = format_ai_meta(self.entry.ai_meta)
             if summary:
-                meta_lbl = QLabel(summary)
-                meta_lbl.setObjectName("MutedLabel")
-                meta_lbl.setWordWrap(True)
+                meta_lbl = hint_label(summary, "MutedLabel")
                 layout.addWidget(meta_lbl)
             for label, key in (
                 ("Prompt", "prompt"),
@@ -137,26 +137,25 @@ class DetailDialog(QDialog):
         rating_layout = QHBoxLayout()
         rating_layout.setSpacing(8)
         for rating in range(1, 6):
-            btn = QPushButton(str(rating))
-            btn.setProperty("variant", "secondary")
-            btn.setToolTip(f"Bewertung {rating}: Score {self._rating_delta(rating):+d}")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(
-                lambda checked=False, value=rating: self._apply_rating(value)
+            btn = button(
+                str(rating),
+                "secondary",
+                lambda value=rating: self._apply_rating(value),
+                tooltip=f"Bewertung {rating}: Score {self._rating_delta(rating):+d}",
+                cursor=True,
             )
             rating_layout.addWidget(btn)
         layout.addLayout(rating_layout)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        btn_edit = QPushButton("✏️  Manuell bearbeiten")
-        btn_edit.setProperty("variant", "secondary")
-        btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_edit.clicked.connect(self._trigger_edit)
-        btn_close = QPushButton("Schließen")
-        btn_close.setProperty("variant", "ghost")
-        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_close.clicked.connect(self.reject)
+        btn_edit = button(
+            "✏️  Manuell bearbeiten",
+            "secondary",
+            self._trigger_edit,
+            cursor=True,
+        )
+        btn_close = button("Schließen", "ghost", self.reject, cursor=True)
         buttons.addWidget(btn_edit)
         buttons.addStretch()
         buttons.addWidget(btn_close)
@@ -261,42 +260,30 @@ class EditDialog(QDialog):
         layout.addWidget(self.inp_desc)
 
         if self.entry_type == MediaType.VIDEO:
-            layout.addWidget(field_label("Video-Datei"))
-            video_row = QHBoxLayout()
-            video_row.setSpacing(8)
-            self.inp_video = QLineEdit()
-            video_row.addWidget(self.inp_video)
-            btn_v = QPushButton("Wählen")
-            btn_v.setProperty("variant", "secondary")
-            btn_v.clicked.connect(self._choose_vid)
-            video_row.addWidget(btn_v)
-            layout.addLayout(video_row)
+            self.inp_video = self._path_row(
+                layout,
+                "Video-Datei",
+                "Video wählen",
+                "Videos (*.mp4 *.mkv *.avi *.mov *.webm)",
+            )
 
         layout.addWidget(field_label("Score (1-100)"))
         self.inp_score = QLineEdit("50")
         layout.addWidget(self.inp_score)
 
-        layout.addWidget(field_label("Vorschaubild"))
-        image_row = QHBoxLayout()
-        image_row.setSpacing(8)
-        self.inp_img = QLineEdit()
-        image_row.addWidget(self.inp_img)
-        btn_i = QPushButton("Wählen")
-        btn_i.setProperty("variant", "secondary")
-        btn_i.clicked.connect(self._choose_img)
-        image_row.addWidget(btn_i)
-        layout.addLayout(image_row)
+        self.inp_img = self._path_row(
+            layout,
+            "Vorschaubild",
+            "Bild wählen",
+            "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
 
         layout.addStretch()
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_save = QPushButton("Speichern")
-        btn_save.setProperty("variant", "primary")
-        btn_save.clicked.connect(self._save)
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_save = button("Speichern", "primary", self._save)
         buttons.addStretch()
         buttons.addWidget(btn_cancel)
         buttons.addWidget(btn_save)
@@ -313,25 +300,25 @@ class EditDialog(QDialog):
             if self.entry_type == MediaType.VIDEO:
                 self.inp_video.setText(self.entry.video_link)
 
-    def _choose_vid(self) -> None:
-        """Open a file dialog to choose a video file."""
-        path, _ = file_dialogs.pick_file(
-            self,
-            "Video wählen",
-            "Videos (*.mp4 *.mkv *.avi *.mov *.webm)",
-        )
-        if path:
-            self.inp_video.setText(path)
+    def _path_row(
+        self, layout: QVBoxLayout, label: str, title: str, file_filter: str
+    ) -> QLineEdit:
+        """Add a labelled path input with a button that opens a file dialog."""
+        layout.addWidget(field_label(label))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        line = QLineEdit()
+        row.addWidget(line)
+        choose = partial(self._choose, line, title, file_filter)
+        row.addWidget(button("Wählen", "secondary", choose))
+        layout.addLayout(row)
+        return line
 
-    def _choose_img(self) -> None:
-        """Open a file dialog to choose an image file."""
-        path, _ = file_dialogs.pick_file(
-            self,
-            "Bild wählen",
-            "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)",
-        )
+    def _choose(self, line: QLineEdit, title: str, file_filter: str) -> None:
+        """Open a file dialog and put the chosen path into ``line``."""
+        path, _ = file_dialogs.pick_file(self, title, file_filter)
         if path:
-            self.inp_img.setText(path)
+            line.setText(path)
 
     def _save(self) -> None:
         """Validate the inputs and save the entry to the database."""
@@ -386,6 +373,29 @@ class EditDialog(QDialog):
         self.accept()
 
 
+def _group_checklist(groups: list[str]) -> tuple[QScrollArea, dict[str, QCheckBox]]:
+    """Return a scroll area with one checked checkbox per group, keyed by group."""
+    content = QWidget()
+    vbox = QVBoxLayout(content)
+    vbox.setContentsMargins(4, 4, 4, 4)
+    vbox.setSpacing(6)
+    boxes: dict[str, QCheckBox] = {}
+    for group in groups:
+        boxes[group] = box = QCheckBox(group)
+        box.setChecked(True)
+        vbox.addWidget(box)
+    vbox.addStretch()
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setWidget(content)
+    return scroll, boxes
+
+
+def _checked_groups(boxes: dict[str, QCheckBox]) -> list[str]:
+    """Return the groups whose checkbox is checked."""
+    return [group for group, box in boxes.items() if box.isChecked()]
+
+
 class GroupRandomDialog(QDialog):
     """Dialog to choose groups and media types for a random pick."""
 
@@ -408,22 +418,7 @@ class GroupRandomDialog(QDialog):
 
         layout.addWidget(field_label("Gruppen"))
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        self.vbox = QVBoxLayout(content)
-        self.vbox.setContentsMargins(4, 4, 4, 4)
-        self.vbox.setSpacing(6)
-
-        self.group_boxes: dict[str, QCheckBox] = {}
-        for group in self.db.get_all_groups():
-            box = QCheckBox(group)
-            box.setChecked(True)
-            self.vbox.addWidget(box)
-            self.group_boxes[group] = box
-        self.vbox.addStretch()
-
-        scroll.setWidget(content)
+        scroll, self.group_boxes = _group_checklist(self.db.get_all_groups())
         layout.addWidget(scroll, 1)
 
         layout.addWidget(field_label("Medientyp"))
@@ -440,15 +435,9 @@ class GroupRandomDialog(QDialog):
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_normal = QPushButton("🎲  Normal")
-        btn_normal.setProperty("variant", "secondary")
-        btn_normal.clicked.connect(lambda: self._execute(False))
-        btn_smart = QPushButton("⚖️  Smart")
-        btn_smart.setProperty("variant", "primary")
-        btn_smart.clicked.connect(lambda: self._execute(True))
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_normal = button("🎲  Normal", "secondary", lambda: self._execute(False))
+        btn_smart = button("⚖️  Smart", "primary", lambda: self._execute(True))
         button_row.addWidget(btn_cancel)
         button_row.addStretch()
         button_row.addWidget(btn_normal)
@@ -457,9 +446,7 @@ class GroupRandomDialog(QDialog):
 
     def _execute(self, smart: bool) -> None:
         """Build the selection pool from groups/types and close the dialog."""
-        selected_groups = [
-            group for group, box in self.group_boxes.items() if box.isChecked()
-        ]
+        selected_groups = _checked_groups(self.group_boxes)
         selected_types = []
         if self.cb_img.isChecked():
             selected_types.append(MediaType.IMAGE)
@@ -499,37 +486,17 @@ class GroupPickDialog(QDialog):
         layout.setSpacing(12)
         layout.addWidget(field_label("Gruppen"))
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        vbox = QVBoxLayout(content)
-        vbox.setContentsMargins(4, 4, 4, 4)
-        vbox.setSpacing(6)
-        self.group_boxes: dict[str, QCheckBox] = {}
-        for group in groups:
-            box = QCheckBox(group)
-            box.setChecked(True)
+        scroll, self.group_boxes = _group_checklist(groups)
+        for box in self.group_boxes.values():
             box.toggled.connect(self._sync_ok)
-            vbox.addWidget(box)
-            self.group_boxes[group] = box
-        vbox.addStretch()
-        scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        btn_all = QPushButton("Alle")
-        btn_all.setProperty("variant", "ghost")
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none = QPushButton("Keine")
-        btn_none.setProperty("variant", "ghost")
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        self.btn_ok = QPushButton("Übernehmen")
-        self.btn_ok.setProperty("variant", "primary")
-        self.btn_ok.clicked.connect(self._accept)
+        btn_all = button("Alle", "ghost", lambda: self._set_all(True))
+        btn_none = button("Keine", "ghost", lambda: self._set_all(False))
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        self.btn_ok = button("Übernehmen", "primary", self._accept)
         row.addWidget(btn_all)
         row.addWidget(btn_none)
         row.addStretch()
@@ -547,9 +514,7 @@ class GroupPickDialog(QDialog):
         self.btn_ok.setEnabled(any(b.isChecked() for b in self.group_boxes.values()))
 
     def _accept(self) -> None:
-        self.selected_groups = [
-            group for group, box in self.group_boxes.items() if box.isChecked()
-        ]
+        self.selected_groups = _checked_groups(self.group_boxes)
         self.accept()
 
 
@@ -594,9 +559,7 @@ class ConfigDialog(QDialog):
         self.list_configs.itemDoubleClicked.connect(lambda _item: self._open_selected())
         layout.addWidget(self.list_configs, 1)
 
-        btn_open = QPushButton("Ausgewählte Config öffnen")
-        btn_open.setProperty("variant", "secondary")
-        btn_open.clicked.connect(self._open_selected)
+        btn_open = button("Ausgewählte Config öffnen", "secondary", self._open_selected)
         layout.addWidget(btn_open)
 
         layout.addWidget(field_label("Neu erstellen"))
@@ -616,33 +579,28 @@ class ConfigDialog(QDialog):
             "Ordner (optional) – beim Start oder per Knopf scannen"
         )
         folder_row.addWidget(self.inp_folder)
-        btn_folder = QPushButton("Ordner wählen…")
-        btn_folder.setProperty("variant", "secondary")
-        btn_folder.clicked.connect(self._choose_folder)
+        btn_folder = button("Ordner wählen…", "secondary", self._choose_folder)
         folder_row.addWidget(btn_folder)
-        btn_stick = QPushButton("Vom Stick…")
-        btn_stick.setProperty("variant", "secondary")
-        btn_stick.setToolTip("Ordner auf einem Stick als eigene Config einrichten")
-        btn_stick.clicked.connect(self._request_stick_setup)
+        btn_stick = button(
+            "Vom Stick…",
+            "secondary",
+            self._request_stick_setup,
+            tooltip="Ordner auf einem Stick als eigene Config einrichten",
+        )
         folder_row.addWidget(btn_stick)
         layout.addLayout(folder_row)
 
-        hint = QLabel(
+        hint = hint_label(
             "Ohne Ordner startet die Config leer; Medien danach einzeln importieren. "
-            "\"Vom Stick\" legt die Config direkt auf einem USB-Stick an."
+            "\"Vom Stick\" legt die Config direkt auf einem USB-Stick an.",
+            "MutedLabel",
         )
-        hint.setObjectName("MutedLabel")
-        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_create = QPushButton("Erstellen & öffnen")
-        btn_create.setProperty("variant", "primary")
-        btn_create.clicked.connect(self._create)
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_create = button("Erstellen & öffnen", "primary", self._create)
         buttons.addStretch()
         buttons.addWidget(btn_cancel)
         buttons.addWidget(btn_create)
@@ -694,7 +652,6 @@ class ConfigDialog(QDialog):
         self.configs.append(config)
         save_configs(self.configs, config.db_path)
         self.selected_config = config
-        self.selected_config = config
         self.accept()
 
 
@@ -717,9 +674,7 @@ class FolderPreviewDialog(QDialog):
         heading.setObjectName("DialogTitle")
         layout.addWidget(heading)
 
-        hint = QLabel("Nur Bilder mit KI-Metadaten werden übernommen.")
-        hint.setObjectName("HintLabel")
-        hint.setWordWrap(True)
+        hint = hint_label("Nur Bilder mit KI-Metadaten werden übernommen.")
         layout.addWidget(hint)
 
         self.list_files = QListWidget()
@@ -738,12 +693,8 @@ class FolderPreviewDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_import = QPushButton(f"{len(paths)} importieren")
-        btn_import.setProperty("variant", "primary")
-        btn_import.clicked.connect(self.accept)
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_import = button(f"{len(paths)} importieren", "primary", self.accept)
         buttons.addWidget(btn_cancel)
         buttons.addWidget(btn_import)
         layout.addLayout(buttons)
@@ -768,9 +719,7 @@ class AnalysisDialog(QDialog):
         text.setHtml(self._build_html(summarize_prompts(db.entries)))
         layout.addWidget(text)
 
-        btn_close = QPushButton("Schließen")
-        btn_close.setProperty("variant", "secondary")
-        btn_close.clicked.connect(self.accept)
+        btn_close = button("Schließen", "secondary", self.accept)
         layout.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignRight)
 
     @staticmethod
@@ -782,11 +731,12 @@ class AnalysisDialog(QDialog):
         def listing(rows: list[Any], formatter: Callable[[Any], str]) -> str:
             return "<br>".join(formatter(row) for row in rows) or "–"
 
-        tags = listing(summary["top_tags"], lambda row: f"{escape(row[0])} ({row[1]}×)")
-        models = listing(summary["models"], lambda row: f"{escape(row[0])} ({row[1]}×)")
-        samplers = listing(
-            summary["samplers"], lambda row: f"{escape(row[0])} ({row[1]}×)"
-        )
+        def counted(row: Any) -> str:
+            return f"{escape(row[0])} ({row[1]}×)"
+
+        tags = listing(summary["top_tags"], counted)
+        models = listing(summary["models"], counted)
+        samplers = listing(summary["samplers"], counted)
         scored = listing(
             summary["top_tags_by_score"],
             lambda row: f"{escape(row[0])} · Ø {row[2]:.0f} ({row[1]}×)",

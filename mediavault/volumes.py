@@ -41,14 +41,8 @@ def mounted_roots() -> list[str]:
     except ImportError:  # pragma: no cover - PyQt6 is a hard dependency
         logger.debug("QStorageInfo nicht verfuegbar", exc_info=True)
         return []
-    roots: list[str] = []
-    for volume in QStorageInfo.mountedVolumes():
-        if not volume.isValid():
-            continue
-        root = volume.rootPath()
-        if root and root not in roots:
-            roots.append(root)
-    return roots
+    roots = (v.rootPath() for v in QStorageInfo.mountedVolumes() if v.isValid())
+    return [root for root in dict.fromkeys(roots) if root]
 
 
 def marker_path(root: str) -> str:
@@ -91,43 +85,39 @@ def vaults(
 ) -> list[tuple[str, VolumeInfo]]:
     """Return every connected volume that carries a vault marker."""
     candidates = list(roots) if roots is not None else mounted_roots()
-    found: list[tuple[str, VolumeInfo]] = []
-    for root in candidates:
-        info = read_marker(root)
-        if info is not None:
-            found.append((root, info))
-    return found
+    return [(root, info) for root in candidates if (info := read_marker(root))]
 
 
 def find_volume(volume_uuid: str, roots: Iterable[str] | None = None) -> str:
     """Return the mount point currently carrying volume_uuid, else an empty string."""
     if not volume_uuid:
         return ""
-    for root, info in vaults(roots):
-        if info.uuid == volume_uuid:
-            return root
-    return ""
+    return next((root for root, info in vaults(roots) if info.uuid == volume_uuid), "")
 
 
 def volume_for_path(
     path: str, roots: Iterable[str] | None = None
 ) -> tuple[str, VolumeInfo | None]:
     """Return the mount point that contains path and its marker, if any."""
-    if not path:
-        return "", None
-    target = os.path.normcase(os.path.abspath(path))
-    best = ""
-    best_length = -1
     candidates = list(roots) if roots is not None else mounted_roots()
-    for root in candidates:
-        base = os.path.normcase(os.path.abspath(root))
-        if target != base and not target.startswith(base.rstrip(os.sep) + os.sep):
-            continue
-        if len(base) > best_length:
-            best, best_length = root, len(base)
-    if not best:
+    containing = [root for root in candidates if is_inside(path, root)]
+    if not containing:
         return "", None
+    # The deepest mount point wins; on a tie the first one is kept.
+    best = max(containing, key=lambda root: len(_norm(root)))
     return best, read_marker(best)
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def is_inside(path: str, folder: str) -> bool:
+    """Return True if path is folder itself or lives inside it."""
+    if not path or not folder:
+        return False
+    target, base = _norm(path), _norm(folder)
+    return target == base or target.startswith(base.rstrip(os.sep) + os.sep)
 
 
 def relative_to_root(path: str, root: str) -> str:
@@ -159,13 +149,7 @@ def folder_path(root: str, relative: str) -> str:
 
 def stored_path(path: str, root: str) -> str:
     """Return the value to persist: relative inside the volume, else absolute."""
-    if not path or not root:
-        return path
-    target = os.path.normcase(os.path.abspath(path))
-    base = os.path.normcase(os.path.abspath(root))
-    if target != base and not target.startswith(base.rstrip(os.sep) + os.sep):
-        return path
-    return relative_to_root(path, root)
+    return relative_to_root(path, root) if is_inside(path, root) else path
 
 
 def absolute_path(value: str, root: str) -> str:

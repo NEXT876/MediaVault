@@ -1,8 +1,17 @@
-"""Card widget for the media grid."""
+"""Card widget for the media grid and small widget factories for the dialogs."""
+
+from collections.abc import Callable
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent, QPainter, QPainterPath, QPixmap
-from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from mediavault.gui.theme import repolish
 from mediavault.models import MediaItem
@@ -11,6 +20,34 @@ CARD_WIDTH = 200
 CARD_HEIGHT = 270
 IMAGE_SIZE = 176
 IMAGE_RADIUS = 10
+
+
+def button(
+    text: str,
+    variant: str,
+    slot: Callable[[], object] | None = None,
+    *,
+    tooltip: str = "",
+    cursor: bool = False,
+) -> QPushButton:
+    """Create a styled push button; slot is called without the checked flag."""
+    btn = QPushButton(text)
+    btn.setProperty("variant", variant)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    if cursor:
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    if slot is not None:
+        btn.clicked.connect(lambda _=False: slot())
+    return btn
+
+
+def hint_label(text: str = "", name: str = "HintLabel") -> QLabel:
+    """Create a wrapped, muted info label (HintLabel or MutedLabel)."""
+    label = QLabel(text)
+    label.setObjectName(name)
+    label.setWordWrap(True)
+    return label
 
 
 def field_label(text: str) -> QLabel:

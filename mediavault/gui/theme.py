@@ -15,13 +15,13 @@ FONT_FAMILIES = ("Segoe UI", "Noto Sans", "Ubuntu", "Cantarell", "DejaVu Sans")
 
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
-        "bg": "#14161a",
-        "surface": "#1c1f26",
-        "surface_alt": "#232833",
-        "hover": "#2b3240",
-        "input_bg": "#1a1e25",
-        "border": "#2c3340",
-        "border_strong": "#3d4657",
+        "bg": "#1f2228",
+        "surface": "#272b33",
+        "surface_alt": "#2e333e",
+        "hover": "#363d4b",
+        "input_bg": "#252a32",
+        "border": "#373e4c",
+        "border_strong": "#485163",
         "text": "#e6e8ec",
         "text_muted": "#98a2b3",
         "primary": "#4f8cff",
@@ -29,11 +29,11 @@ PALETTES: dict[str, dict[str, str]] = {
         "primary_text": "#ffffff",
         "danger": "#e05252",
         "danger_hover": "#f06565",
-        "selection_bg": "#1e2b42",
+        "selection_bg": "#26344c",
         "selection_fill": "rgba(79, 140, 255, 48)",
-        "nav_active_bg": "#24324a",
-        "scrollbar": "#3a4250",
-        "scrollbar_hover": "#4a5466",
+        "nav_active_bg": "#2c3b55",
+        "scrollbar": "#454d5c",
+        "scrollbar_hover": "#555f72",
         "score_high": "#2f9e6f",
         "score_mid": "#c08a2e",
         "score_low": "#c2703a",
@@ -347,30 +347,28 @@ def build_stylesheet(name: str) -> str:
 def build_qpalette(name: str) -> QPalette:
     """Return a QPalette for native dialogs and popups."""
     colors = PALETTES.get(name, PALETTES["dark"])
+    role = QPalette.ColorRole
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(colors["bg"]))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Base, QColor(colors["input_bg"]))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(colors["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.Text, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Button, QColor(colors["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(colors["primary"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(colors["primary_text"]))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(colors["surface"]))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(colors["text_muted"]))
-    palette.setColor(QPalette.ColorRole.Link, QColor(colors["primary"]))
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.Text,
-        QColor(colors["text_muted"]),
-    )
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.ButtonText,
-        QColor(colors["text_muted"]),
-    )
+    for color_role, key in (
+        (role.Window, "bg"),
+        (role.WindowText, "text"),
+        (role.Base, "input_bg"),
+        (role.AlternateBase, "surface_alt"),
+        (role.Text, "text"),
+        (role.Button, "surface_alt"),
+        (role.ButtonText, "text"),
+        (role.Highlight, "primary"),
+        (role.HighlightedText, "primary_text"),
+        (role.ToolTipBase, "surface"),
+        (role.ToolTipText, "text"),
+        (role.PlaceholderText, "text_muted"),
+        (role.Link, "primary"),
+    ):
+        palette.setColor(color_role, QColor(colors[key]))
+    for color_role in (role.Text, role.ButtonText):
+        palette.setColor(
+            QPalette.ColorGroup.Disabled, color_role, QColor(colors["text_muted"])
+        )
     return palette
 
 

@@ -115,13 +115,10 @@ class CardGrid(QScrollArea):
         self.cards = [self._make_card(entry) for entry in entries]
 
         visible = set(self.entries)
-        self.selected &= visible
         if self._anchor not in visible:
             self._anchor = None
-        for card in self.cards:
-            card.set_selected(card.entry in self.selected)
         self._update_columns(force=True)
-        self.selection_changed.emit()
+        self.set_selection(self.selected & visible)
         self._start_thumbnail_load()
 
     def _make_card(self, entry: MediaItem) -> MediaCard:
