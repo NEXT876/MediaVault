@@ -128,7 +128,7 @@ def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
         config = _default_config()
         return [config], config.db_path
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         logger.warning("Configs konnten nicht gelesen werden: %s", path)

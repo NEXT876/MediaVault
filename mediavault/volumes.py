@@ -61,7 +61,7 @@ def read_marker(root: str) -> VolumeInfo | None:
     if not root:
         return None
     try:
-        with open(marker_path(root), "r", encoding="utf-8") as f:
+        with open(marker_path(root), encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None

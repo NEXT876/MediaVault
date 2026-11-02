@@ -110,7 +110,7 @@ class MediaDatabase:
             if not os.path.exists(self.filepath):
                 return
             try:
-                with open(self.filepath, "r", encoding="utf-8") as f:
+                with open(self.filepath, encoding="utf-8") as f:
                     data = json.load(f)
                     if not isinstance(data, list) or not all(
                         isinstance(item, dict) for item in data

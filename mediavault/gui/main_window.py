@@ -796,7 +796,7 @@ class MainWindow(QMainWindow):
 
     def _mark_folder_synced(self) -> None:
         """Store and display the time of the last completed folder sync."""
-        self.config.folder_last_sync = datetime.now().strftime("%d.%m.%Y %H:%M")
+        self.config.folder_last_sync = datetime.now().astimezone().strftime("%d.%m.%Y %H:%M")
         save_configs(self.configs, self.config.db_path)
         self._update_last_sync_label()
 
