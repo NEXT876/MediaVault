@@ -1,0 +1,198 @@
+"""Sidebar with views, storage, random picks, online import and settings."""
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+
+from mediavault.models import MediaType
+
+
+def _section_label(text: str) -> QLabel:
+    """Create a muted section heading."""
+    label = QLabel(text)
+    label.setObjectName("SectionLabel")
+    label.setContentsMargins(4, 10, 0, 2)
+    return label
+
+
+def _hint_label() -> QLabel:
+    """Create a small wrapped status line under a button."""
+    label = QLabel("")
+    label.setObjectName("HintLabel")
+    label.setWordWrap(True)
+    label.setContentsMargins(4, 0, 0, 0)
+    return label
+
+
+def _nav_button(text: str, checkable: bool = False) -> QPushButton:
+    """Create a left-aligned navigation button."""
+    button = QPushButton(text)
+    button.setProperty("nav", True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if checkable:
+        button.setCheckable(True)
+        button.setAutoExclusive(True)
+    return button
+
+
+class Sidebar(QWidget):
+    """Left navigation column; it only reports clicks and shows state."""
+
+    view_requested = pyqtSignal(object)
+    downloads_requested = pyqtSignal()
+    random_requested = pyqtSignal(bool, bool)  # smart, global pool
+    group_random_requested = pyqtSignal()
+    stick_requested = pyqtSignal()
+    analysis_requested = pyqtSignal()
+    sync_requested = pyqtSignal()
+    rule34_requested = pyqtSignal()
+    config_requested = pyqtSignal()
+    theme_requested = pyqtSignal()
+    new_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Build all sections; mode-specific ones start visible."""
+        super().__init__(parent)
+        self.setObjectName("Sidebar")
+        self.setFixedWidth(250)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 22, 16, 22)
+        layout.setSpacing(6)
+
+        title = QLabel("MediaVault")
+        title.setObjectName("AppTitle")
+        subtitle = QLabel("Deine Medienbibliothek")
+        subtitle.setObjectName("AppSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(12)
+
+        layout.addWidget(_section_label("ANSICHTEN"))
+        self._view_buttons = {
+            MediaType.IMAGE: _nav_button("🖼️  Bilder", checkable=True),
+            MediaType.VIDEO: _nav_button("🎬  Videos", checkable=True),
+        }
+        for view, button in self._view_buttons.items():
+            button.clicked.connect(lambda _=False, v=view: self.view_requested.emit(v))
+            layout.addWidget(button)
+
+        layout.addWidget(_section_label("SPEICHER"))
+        btn_stick = self._add(layout, "🔌  Stick einrichten", self.stick_requested)
+        btn_stick.setToolTip(
+            "Ordner auf einem USB-Stick als Mediathek einrichten oder zuweisen"
+        )
+        self._lbl_stick = _hint_label()
+        layout.addWidget(self._lbl_stick)
+
+        self._ai_widgets: list[QWidget] = [_section_label("KI-ANALYSE")]
+        layout.addWidget(self._ai_widgets[0])
+        self._ai_widgets.append(
+            self._add(layout, "📊  Analyse", self.analysis_requested)
+        )
+        self._btn_sync = self._add(
+            layout, "🔄  Ordner synchronisieren", self.sync_requested
+        )
+        self._btn_sync.setToolTip("Ordner jetzt nach neuen Bildern durchsuchen")
+        self._lbl_last_sync = _hint_label()
+        layout.addWidget(self._lbl_last_sync)
+
+        layout.addWidget(_section_label("ZUFALL (LOKAL)"))
+        for text, smart, global_pool in (
+            ("🎲  Normal", False, False),
+            ("⚖️  Smart", True, False),
+        ):
+            self._add_random(layout, text, smart, global_pool)
+        layout.addWidget(_section_label("ZUFALL (GLOBAL)"))
+        for text, smart, global_pool in (
+            ("🌍  Alles", False, True),
+            ("⚖️🌍  Alles Smart", True, True),
+        ):
+            self._add_random(layout, text, smart, global_pool)
+        self._add(layout, "📂  Aus Gruppen", self.group_random_requested)
+
+        self._online_widgets: list[QWidget] = [_section_label("ONLINE")]
+        layout.addWidget(self._online_widgets[0])
+        self._btn_rule34 = self._add(layout, "", self.rule34_requested)
+        self._online_widgets.append(self._btn_rule34)
+        self.set_rule34_loading(False)
+        self._btn_downloads = _nav_button("⬇️  Downloads", checkable=True)
+        self._btn_downloads.clicked.connect(self.downloads_requested)
+        self._btn_downloads.setVisible(False)
+        layout.addWidget(self._btn_downloads)
+
+        layout.addStretch()
+        self._add(layout, "⚙️  Config wechseln", self.config_requested)
+        self._btn_theme = self._add(layout, "", self.theme_requested)
+
+        btn_new = QPushButton("+  Neuer Eintrag")
+        btn_new.setProperty("variant", "primary")
+        btn_new.setFixedHeight(40)
+        btn_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_new.clicked.connect(self.new_requested)
+        layout.addWidget(btn_new)
+
+    def _add(self, layout: QVBoxLayout, text: str, signal: pyqtSignal) -> QPushButton:
+        """Add a navigation button that emits ``signal`` when clicked."""
+        button = _nav_button(text)
+        button.clicked.connect(lambda _=False: signal.emit())
+        layout.addWidget(button)
+        return button
+
+    def _add_random(
+        self, layout: QVBoxLayout, text: str, smart: bool, global_pool: bool
+    ) -> None:
+        """Add a button that asks for a random pick."""
+        button = _nav_button(text)
+        button.clicked.connect(
+            lambda _=False: self.random_requested.emit(smart, global_pool)
+        )
+        layout.addWidget(button)
+
+    # --- State ---
+    def set_mode(self, ai: bool, has_folder: bool) -> None:
+        """Show only the sections that fit the active config's mode."""
+        self._view_buttons[MediaType.VIDEO].setVisible(not ai)
+        for widget in self._ai_widgets:
+            widget.setVisible(ai)
+        self._btn_sync.setVisible(ai and has_folder)
+        self._lbl_last_sync.setVisible(ai and has_folder)
+        for widget in self._online_widgets:
+            widget.setVisible(not ai)
+
+    def set_page(self, view: MediaType | None) -> None:
+        """Check the button of a library view, or Downloads for None."""
+        for media_type, button in self._view_buttons.items():
+            button.setChecked(media_type == view)
+        self._btn_downloads.setChecked(view is None)
+
+    def set_stick_status(self, text: str) -> None:
+        """Show the connection state of the config's stick."""
+        self._lbl_stick.setText(text)
+
+    def set_last_sync(self, stamp: str) -> None:
+        """Show when the config's folder was last synchronized."""
+        self._lbl_last_sync.setText(
+            f"Zuletzt synchronisiert: {stamp}" if stamp else "Noch nicht synchronisiert"
+        )
+
+    def set_sync_running(self, running: bool) -> None:
+        """Disable the sync button while a folder sync runs."""
+        self._btn_sync.setEnabled(not running)
+
+    def set_rule34_loading(self, loading: bool) -> None:
+        """Show that posts are being fetched."""
+        self._btn_rule34.setEnabled(not loading)
+        self._btn_rule34.setText("⬇️  Lade Posts …" if loading else "⬇️  rule34 Import")
+
+    def set_downloads(self, open_jobs: int, has_jobs: bool) -> None:
+        """Mirror the download queue on its button."""
+        self._btn_downloads.setText(
+            f"⬇️  Downloads ({open_jobs})" if open_jobs else "⬇️  Downloads"
+        )
+        self._btn_downloads.setVisible(has_jobs)
+
+    def set_theme(self, dark: bool) -> None:
+        """Label the theme toggle with the theme it switches to."""
+        self._btn_theme.setText("☀️  Helles Theme" if dark else "🌙  Dunkles Theme")
+        self._btn_theme.setToolTip(
+            "Zu hellem Theme wechseln" if dark else "Zu dunklem Theme wechseln"
+        )

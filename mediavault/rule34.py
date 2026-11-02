@@ -295,6 +295,28 @@ def fetch_preview(
         return None
 
 
+def fetch_posts_with_previews(
+    api_key: str,
+    user_id: str,
+    tags: str,
+    webm: bool,
+    limit: int,
+    last_ids: Mapping[str, int],
+    *,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> tuple[list[Post], dict[int, bytes], dict[str, int]]:
+    """Fetch new posts plus their thumbnails for the selection dialog."""
+    posts, newest_ids = collect_new_posts_multi(
+        api_key, user_id, tags, webm, limit, last_ids, opener=opener
+    )
+    previews: dict[int, bytes] = {}
+    for post in posts:
+        data = fetch_preview(post.preview_url, opener=opener)
+        if data:
+            previews[post.id] = data
+    return posts, previews, newest_ids
+
+
 def download_dir(config_folder: str) -> str:
     """Return the download folder for a config."""
     if config_folder.strip():
@@ -352,13 +374,15 @@ def download_and_import(
     folder: str,
     tags: str,
     selected_ids: set[int] | None = None,
+    root: str = "",
     opener: Callable[..., Any] = urllib.request.urlopen,
     progress: Callable[[int, int], None] | None = None,
 ) -> Rule34Result:
     """Download and import ``posts``, optionally only those in ``selected_ids``.
 
     ``newest_id`` covers all fetched posts, so deselected posts are not shown
-    again on the next run. ``progress`` is called with the number of finished
+    again on the next run. ``root`` is the volume root of a stick library, so
+    stored paths stay relative to it. ``progress`` is called with the number of finished
     files and the total after each file, successful or not.
     """
     result = Rule34Result()
@@ -395,6 +419,7 @@ def download_and_import(
             type_str=media_type,
             group=group,
             mode=MODE_NORMAL,
+            root=root,
         )
         result.imported += imported.added
         result.duplicates += imported.duplicates

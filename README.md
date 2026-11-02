@@ -40,19 +40,28 @@ MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mi
 ```
 mediavault/
 ├── __main__.py        # Einstiegspunkt, Splash-Screen
-├── config.py          # Datenbankpfad und Logging
+├── config.py          # Configs, Datenbankpfade, Stick-Auflösung, Logging
 ├── models.py          # MediaItem und MediaDatabase (JSON-Persistenz)
+├── library.py         # Filtern/Sortieren fürs Raster, Ordner indexieren
+├── importer.py        # Import mit Duplikaterkennung
 ├── scanner.py         # Neue Medien in einem Ordner finden
+├── transfer.py        # Dateien in den Mediathek-Ordner kopieren
+├── volumes.py         # Stick-Marker und relative Pfade
+├── rule34.py          # rule34-API, Downloads
 ├── media_preview.py   # Videoframes und System-Thumbnails
 └── gui/
-    ├── main_window.py # Hauptfenster, Auswahl, Suche, Sortierung
+    ├── main_window.py # Hauptfenster: verdrahtet Seitenleiste, Raster, Dialoge
+    ├── sidebar.py     # Seitenleiste mit Navigation und Statusanzeigen
+    ├── card_grid.py   # Kachelraster, Auswahl, Vorschau-Cache
     ├── selection.py   # Auswahlrechteck mit Auto-Scroll
     ├── widgets.py     # Medienkacheln
-    ├── dialogs.py     # Detail-, Bearbeiten- und Gruppen-Dialoge
+    ├── folder_sync.py # Ordner-Sync mit Vorschau und Import
+    ├── rule34_import.py # rule34: Posts holen, auswählen, einreihen
+    ├── downloads.py   # Download-Warteschlange
+    ├── dialogs.py     # Detail-, Bearbeiten-, Gruppen- und Config-Dialoge
     ├── file_dialogs.py # Native Dateiauswahl, Dateien öffnen
     └── theme.py       # Dark-/Light-Paletten und QSS
 tests/
-└── test_media_database.py
 ```
 
 ## Start
