@@ -59,6 +59,8 @@ class Sidebar(QWidget):
         """Build all sections; mode-specific ones start visible."""
         super().__init__(parent)
         self.setObjectName("Sidebar")
+        # Plain QWidget subclasses ignore stylesheet backgrounds without this.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(250)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 22, 16, 22)
