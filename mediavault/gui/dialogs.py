@@ -38,7 +38,7 @@ from mediavault.config import (
 )
 from mediavault.gui.widgets import field_label, rounded_pixmap
 from mediavault.importer import content_hash
-from mediavault.models import MediaDatabase, MediaItem
+from mediavault.models import MediaDatabase, MediaItem, MediaType
 from mediavault.utils import OSHelper
 
 
@@ -94,10 +94,7 @@ class DetailDialog(QDialog):
         grp_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(grp_lbl)
 
-        has_media = (self.entry.entry_type == "Videos" and self.entry.video_link) or (
-            self.entry.entry_type == "Bilder" and self.entry.image_path
-        )
-        if has_media:
+        if self.entry.file_path:
             btn_play = QPushButton("▶  Abspielen / Öffnen")
             btn_play.setProperty("variant", "primary")
             btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -263,7 +260,7 @@ class EditDialog(QDialog):
         self.inp_desc.setFixedHeight(120)
         layout.addWidget(self.inp_desc)
 
-        if self.entry_type == "Videos":
+        if self.entry_type == MediaType.VIDEO:
             layout.addWidget(field_label("Video-Datei"))
             video_row = QHBoxLayout()
             video_row.setSpacing(8)
@@ -313,7 +310,7 @@ class EditDialog(QDialog):
             self.inp_desc.setPlainText(self.entry.description)
             self.inp_score.setText(str(self.entry.score))
             self.inp_img.setText(self.entry.image_path)
-            if self.entry_type == "Videos":
+            if self.entry_type == MediaType.VIDEO:
                 self.inp_video.setText(self.entry.video_link)
 
     def _choose_vid(self) -> None:
@@ -353,11 +350,12 @@ class EditDialog(QDialog):
         img = volumes.stored_path(self.inp_img.text().strip(), self.root)
         vid = (
             volumes.stored_path(self.inp_video.text().strip(), self.root)
-            if self.entry_type == "Videos"
+            if self.entry_type == MediaType.VIDEO
             else ""
         )
 
-        media = volumes.absolute_path(img or vid, self.root)
+        own_file = vid if self.entry_type == MediaType.VIDEO else img
+        media = volumes.absolute_path(own_file, self.root)
         try:
             file_hash = content_hash(media) if media else ""
         except OSError:
@@ -464,9 +462,9 @@ class GroupRandomDialog(QDialog):
         ]
         selected_types = []
         if self.cb_img.isChecked():
-            selected_types.append("Bilder")
+            selected_types.append(MediaType.IMAGE)
         if self.cb_vid.isChecked():
-            selected_types.append("Videos")
+            selected_types.append(MediaType.VIDEO)
 
         if not selected_groups or not selected_types:
             QMessageBox.warning(

@@ -71,7 +71,7 @@ from mediavault.gui.thumbnails import load_thumbnail, load_thumbnails
 from mediavault.gui.widgets import CARD_WIDTH, MediaCard
 from mediavault.gui.worker import Worker
 from mediavault.importer import find_duplicate, import_paths, norm_path
-from mediavault.models import MediaDatabase, MediaItem
+from mediavault.models import MediaDatabase, MediaItem, MediaType
 from mediavault.rule34 import Post, collect_new_posts_multi, fetch_preview
 from mediavault.transfer import copy_into_folder
 from mediavault.utils import OSHelper
@@ -122,6 +122,10 @@ def visible_entries(
     return entries
 
 
+# Display labels live in the GUI; MediaType values are storage keys.
+VIEW_TITLES = {MediaType.IMAGE: "🖼️ Bilder", MediaType.VIDEO: "🎬 Videos"}
+
+
 class MainWindow(QMainWindow):
     """Main window with sidebar, filter bar, card grid and batch actions."""
 
@@ -150,7 +154,7 @@ class MainWindow(QMainWindow):
         self._databases: dict[str, MediaDatabase] = {self.config.db_path: self.db}
 
         self.theme = theme_manager or ThemeManager()
-        self.current_view: str = "Bilder"
+        self.current_view: str = MediaType.IMAGE
         self.selected_entries: set[MediaItem] = set()
         self.recent_picks: list[MediaItem] = []
         self.thumbnail_cache: dict[str, QPixmap | None] = {}
@@ -225,10 +229,10 @@ class MainWindow(QMainWindow):
 
         side_layout.addWidget(self._create_section_label("ANSICHTEN"))
         self.btn_bilder = self._create_side_btn(
-            "🖼️  Bilder", lambda: self.switch_view("Bilder"), checkable=True
+            "🖼️  Bilder", lambda: self.switch_view(MediaType.IMAGE), checkable=True
         )
         self.btn_videos = self._create_side_btn(
-            "🎬  Videos", lambda: self.switch_view("Videos"), checkable=True
+            "🎬  Videos", lambda: self.switch_view(MediaType.VIDEO), checkable=True
         )
         self.btn_bilder.setChecked(True)
         side_layout.addWidget(self.btn_bilder)
@@ -471,10 +475,10 @@ class MainWindow(QMainWindow):
     def switch_view(self, view: str) -> None:
         """Switch between the image and video views and reload the grid."""
         self.current_view = view
-        self.btn_bilder.setChecked(view == "Bilder")
-        self.btn_videos.setChecked(view == "Videos")
+        self.btn_bilder.setChecked(view == MediaType.IMAGE)
+        self.btn_videos.setChecked(view == MediaType.VIDEO)
         self.btn_downloads.setChecked(False)
-        self.lbl_view_title.setText("🖼️ Bilder" if view == "Bilder" else "🎬 Videos")
+        self.lbl_view_title.setText(VIEW_TITLES[view])
         self.pages.setCurrentWidget(self.scroll_area)
         self._set_library_controls_visible(True)
         self.action_bar.show()
@@ -518,17 +522,17 @@ class MainWindow(QMainWindow):
         self.lbl_rule34_section.setVisible(not ai)
         self.btn_rule34.setVisible(not ai)
         # Open on a view that actually has entries instead of an empty grid.
-        has_images = bool(self.db.get_by_type("Bilder"))
-        has_videos = bool(self.db.get_by_type("Videos"))
-        view = "Videos" if has_videos and not has_images else "Bilder"
+        has_images = bool(self.db.get_by_type(MediaType.IMAGE))
+        has_videos = bool(self.db.get_by_type(MediaType.VIDEO))
+        view = MediaType.VIDEO if has_videos and not has_images else MediaType.IMAGE
         self.current_view = view
-        self.btn_bilder.setChecked(view == "Bilder")
-        self.btn_videos.setChecked(view == "Videos")
+        self.btn_bilder.setChecked(view == MediaType.IMAGE)
+        self.btn_videos.setChecked(view == MediaType.VIDEO)
         self.btn_downloads.setChecked(False)
         self.pages.setCurrentWidget(self.scroll_area)
         self._set_library_controls_visible(True)
         self.action_bar.show()
-        self.lbl_view_title.setText("🎬 Videos" if view == "Videos" else "🖼️ Bilder")
+        self.lbl_view_title.setText(VIEW_TITLES[view])
         self.inp_search.setPlaceholderText(
             "Titel, Beschreibung, Prompt suchen…"
             if ai
@@ -575,8 +579,8 @@ class MainWindow(QMainWindow):
         if not location.available or not os.path.isdir(location.folder):
             return
         ai = self.config.mode == MODE_AI
-        known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
-        known += [entry.video_link for entry in self.db.get_by_type("Videos")]
+        known = [entry.image_path for entry in self.db.get_by_type(MediaType.IMAGE)]
+        known += [entry.video_link for entry in self.db.get_by_type(MediaType.VIDEO)]
         images, videos = find_new_media(
             location.folder,
             known,
@@ -584,7 +588,7 @@ class MainWindow(QMainWindow):
             video_exts=set() if ai else VIDEO_EXTS,
             root=location.volume,
         )
-        for paths, type_str in ((images, "Bilder"), (videos, "Videos")):
+        for paths, type_str in ((images, MediaType.IMAGE), (videos, MediaType.VIDEO)):
             if paths:
                 import_paths(
                     self.db,
@@ -719,7 +723,7 @@ class MainWindow(QMainWindow):
                 self, "Ordner synchronisieren", "Der Ordner wurde nicht gefunden."
             )
             return
-        known = [entry.image_path for entry in self.db.get_by_type("Bilder")]
+        known = [entry.image_path for entry in self.db.get_by_type(MediaType.IMAGE)]
         known.extend(self._sync_ignored)
         self.btn_sync_folder.setEnabled(False)
         worker = Worker(
@@ -756,7 +760,7 @@ class MainWindow(QMainWindow):
             import_paths,
             db=self.db,
             paths=paths,
-            type_str="Bilder",
+            type_str=MediaType.IMAGE,
             group="",
             mode=self.config.mode,
         )
@@ -781,7 +785,8 @@ class MainWindow(QMainWindow):
         if result is None:
             return
         stored = {
-            norm_path(entry.image_path) for entry in self.db.get_by_type("Bilder")
+            norm_path(entry.image_path)
+            for entry in self.db.get_by_type(MediaType.IMAGE)
         }
         self._sync_ignored.update(
             path for path in paths if norm_path(path) not in stored
@@ -953,7 +958,7 @@ class MainWindow(QMainWindow):
     def _leave_empty_downloads(self) -> None:
         """Leave the download page once the last job is cleared."""
         if self.pages.currentWidget() is self.downloads_page:
-            self.switch_view("Bilder")
+            self.switch_view(MediaType.IMAGE)
 
     def _get_pixmap(self, entry: MediaItem) -> QPixmap | None:
         """Return an entry's preview pixmap, cached by its media path.
@@ -1416,10 +1421,10 @@ class MainWindow(QMainWindow):
     def _create_new(self) -> None:
         """Show a menu to choose between single and batch creation."""
         options: list[tuple[str, Callable[[], None]]] = [
-            ("Bild einzeln", lambda: self._create_single("Bilder")),
-            ("Video einzeln", lambda: self._create_single("Videos")),
-            ("Bilder Massenimport", lambda: self._batch_import("Bilder")),
-            ("Videos Massenimport", lambda: self._batch_import("Videos")),
+            ("Bild einzeln", lambda: self._create_single(MediaType.IMAGE)),
+            ("Video einzeln", lambda: self._create_single(MediaType.VIDEO)),
+            ("Bilder Massenimport", lambda: self._batch_import(MediaType.IMAGE)),
+            ("Videos Massenimport", lambda: self._batch_import(MediaType.VIDEO)),
         ]
         if self.config.mode == MODE_AI:
             options = [option for option in options if option[0].startswith("Bild")]
@@ -1433,7 +1438,7 @@ class MainWindow(QMainWindow):
 
     def _create_single(self, type_str: str) -> None:
         """Open the native file picker and then create a single entry."""
-        if type_str == "Bilder":
+        if type_str == MediaType.IMAGE:
             file_filter = "Bilder (*.png *.jpg *.jpeg *.bmp *.webp);;Alle Dateien (*.*)"
         else:
             file_filter = "Videos (*.mp4 *.mkv *.avi *.mov *.webm);;Alle Dateien (*.*)"
@@ -1483,7 +1488,7 @@ class MainWindow(QMainWindow):
             ai_meta=meta,
             root=locate(self.config).volume,
         )
-        if type_str == "Bilder":
+        if type_str == MediaType.IMAGE:
             dlg.inp_img.setText(path)
         else:
             dlg.inp_video.setText(path)
@@ -1500,7 +1505,7 @@ class MainWindow(QMainWindow):
         """Import several files as entries, skipping duplicates."""
         exts = (
             "*.png *.jpg *.jpeg *.bmp *.webp"
-            if type_str == "Bilder"
+            if type_str == MediaType.IMAGE
             else "*.mp4 *.mkv *.avi *.mov *.webm"
         )
         paths, _ = OSHelper.pick_files(

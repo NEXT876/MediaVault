@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage
 
 from mediavault import volumes
-from mediavault.models import MediaItem
+from mediavault.models import MediaItem, MediaType
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def _render(entry: MediaItem, root: str) -> QImage | None:
             logger.debug("Bild konnte nicht geladen werden: %s", entry.image_path)
             return None
         return image
-    if entry.entry_type == "Videos":
+    if entry.entry_type == MediaType.VIDEO:
         path = volumes.absolute_path(entry.video_link, root)
         image = OSHelper.get_video_frame_image(path)
         if image is None:

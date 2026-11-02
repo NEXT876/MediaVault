@@ -133,3 +133,30 @@ def test_recent_picks_are_excluded_unless_whole_pool(monkeypatch):
     assert db.get_random([first, second], recent_picks=[first]) is second
     assert db.get_random([first], recent_picks=[first]) is first
     assert db.get_random([]) is None
+
+
+def test_media_type_is_stored_as_plain_value(tmp_path):
+    from mediavault.models import MediaDatabase, MediaType
+
+    path = tmp_path / "m.json"
+    db = MediaDatabase(str(path))
+    db.entries = [MediaItem("v", entry_type=MediaType.VIDEO, video_link="v.mp4")]
+    db.save()
+
+    assert '"entry_type": "Videos"' in path.read_text(encoding="utf-8")
+    loaded = MediaDatabase(str(path))
+    loaded.load()
+    assert loaded.entries[0].entry_type == MediaType.VIDEO
+    assert loaded.get_by_type(MediaType.VIDEO) == loaded.entries
+    assert str(MediaType.IMAGE) == "Bilder" and f"{MediaType.VIDEO}" == "Videos"
+
+
+def test_file_path_prefers_video_over_preview_image():
+    from mediavault.models import MediaType
+
+    entry = MediaItem(
+        "v", image_path="p.png", entry_type=MediaType.VIDEO, video_link="v.mp4"
+    )
+
+    assert entry.file_path == "v.mp4"
+    assert entry.media_path == "p.png"

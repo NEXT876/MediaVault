@@ -10,11 +10,23 @@ import time
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
+from enum import Enum
 from typing import Any
 
 from mediavault import volumes
 
 logger = logging.getLogger(__name__)
+
+
+class MediaType(str, Enum):
+    """Kind of a media entry; the values are what the JSON file stores."""
+
+    IMAGE = "Bilder"
+    VIDEO = "Videos"
+
+    def __str__(self) -> str:
+        """Format as the stored value on every Python version."""
+        return self.value
 
 
 @dataclass(eq=False)
@@ -29,7 +41,7 @@ class MediaItem:
     image_path: str = ""
     score: int = 50
     description: str = ""
-    entry_type: str = "Bilder"
+    entry_type: str = MediaType.IMAGE
     video_link: str = ""
     watched_counter: int = 0
     last_watched: float = 0.0
@@ -46,11 +58,13 @@ class MediaItem:
     @property
     def file_path(self) -> str:
         """Stored path of the entry's own file, chosen by entry type."""
-        return self.video_link if self.entry_type == "Videos" else self.image_path
+        if self.entry_type == MediaType.VIDEO:
+            return self.video_link
+        return self.image_path
 
     def set_file(self, path: str) -> None:
         """Store a file path in the field that matches the entry type."""
-        if self.entry_type == "Videos":
+        if self.entry_type == MediaType.VIDEO:
             self.video_link = path
         else:
             self.image_path = path

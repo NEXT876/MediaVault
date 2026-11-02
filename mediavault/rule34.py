@@ -12,7 +12,7 @@ from typing import Any
 
 from mediavault.config import MODE_NORMAL
 from mediavault.importer import import_paths
-from mediavault.models import MediaDatabase
+from mediavault.models import MediaDatabase, MediaType
 
 API_URL = "https://api.rule34.xxx/index.php"
 AUTOCOMPLETE_URL = "https://api.rule34.xxx/autocomplete.php"
@@ -382,7 +382,7 @@ def download_and_import(
             detail = str(exc) if isinstance(exc, Rule34Error) else type(exc).__name__
             result.failed.append(f"Post {post.id}: {detail}")
         else:
-            media_type = "Videos" if _is_video(path) else "Bilder"
+            media_type = MediaType.VIDEO if _is_video(path) else MediaType.IMAGE
             key = (post.group or fallback_group, media_type)
             paths.setdefault(key, []).append(path)
         if progress is not None:
