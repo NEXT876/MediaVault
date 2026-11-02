@@ -21,6 +21,36 @@ MODE_AI = "ai"
 
 
 @dataclass
+class Rule34Settings:
+    """Credentials and search state of the optional rule34 integration."""
+
+    api_key: str = ""
+    user_id: str = ""
+    tags: str = ""
+    count: int = 10
+    webm: bool = False
+    last_ids: dict[str, int] = field(default_factory=dict)
+    saved_tags: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], prefix: str = "") -> "Rule34Settings":
+        """Build settings from stored data; prefix reads the old flat keys."""
+
+        def get(key: str) -> Any:
+            return data.get(prefix + key)
+
+        return cls(
+            api_key=str(get("api_key") or ""),
+            user_id=str(get("user_id") or ""),
+            tags=str(get("tags") or ""),
+            count=_int_setting(get("count"), 10, 1, 1000),
+            webm=_bool_setting(get("webm")),
+            last_ids=_last_ids(get("last_ids")),
+            saved_tags=_saved_tags(get("saved_tags")),
+        )
+
+
+@dataclass
 class VaultConfig:
     """A named collection with its own database and optional scan folder."""
 
@@ -28,41 +58,38 @@ class VaultConfig:
     mode: str = MODE_NORMAL
     db_path: str = ""
     folder: str = ""
-    rule34_api_key: str = ""
-    rule34_user_id: str = ""
-    rule34_tags: str = ""
-    rule34_count: int = 10
-    rule34_webm: bool = False
-    rule34_last_ids: dict[str, int] = field(default_factory=dict)
-    # Appended last so existing positional construction keeps working.
     folder_last_sync: str = ""
-    rule34_saved_tags: dict[str, str] = field(default_factory=dict)
     # Set for configs whose media lives on a removable volume; folder_rel is
     # then the location inside that volume, not an absolute path.
     volume_uuid: str = ""
     volume_label: str = ""
     folder_rel: str = ""
+    rule34: Rule34Settings = field(default_factory=Rule34Settings)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
-        """Build a config from stored data, falling back to safe defaults."""
+        """Build a config from stored data, falling back to safe defaults.
+
+        Files written before Rule34Settings existed keep the rule34 values as
+        flat "rule34_*" keys; they are still read.
+        """
         mode = data.get("mode", MODE_NORMAL)
+        nested = data.get("rule34")
+        rule34 = (
+            Rule34Settings.from_dict(nested)
+            if isinstance(nested, Mapping)
+            else Rule34Settings.from_dict(data, prefix="rule34_")
+        )
         return cls(
             name=str(data.get("name") or "Unbenannt"),
             mode=mode if mode in (MODE_NORMAL, MODE_AI) else MODE_NORMAL,
             db_path=str(data.get("db_path") or DEFAULT_DB_PATH),
             folder=str(data.get("folder") or ""),
-            rule34_api_key=str(data.get("rule34_api_key") or ""),
-            rule34_user_id=str(data.get("rule34_user_id") or ""),
-            rule34_tags=str(data.get("rule34_tags") or ""),
-            rule34_count=_int_setting(data.get("rule34_count"), 10, 1, 1000),
-            rule34_webm=_bool_setting(data.get("rule34_webm")),
-            rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
             folder_last_sync=str(data.get("folder_last_sync") or ""),
-            rule34_saved_tags=_saved_tags(data.get("rule34_saved_tags")),
             volume_uuid=str(data.get("volume_uuid") or ""),
             volume_label=str(data.get("volume_label") or ""),
             folder_rel=str(data.get("folder_rel") or ""),
+            rule34=rule34,
         )
 
 
@@ -157,8 +184,14 @@ def save_configs(
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     data = {"last": last, "configs": [asdict(config) for config in configs]}
     tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    # The file holds API credentials: keep it private to the user.
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        logger.debug("Rechte nicht setzbar: %s", tmp_path, exc_info=True)
     os.replace(tmp_path, path)
 
 

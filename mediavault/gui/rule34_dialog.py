@@ -64,16 +64,16 @@ class Rule34Dialog(QDialog):
         layout.addWidget(self.inp_credentials)
 
         layout.addWidget(field_label("API-Key"))
-        self.inp_key = QLineEdit(config.rule34_api_key)
+        self.inp_key = QLineEdit(config.rule34.api_key)
         self.inp_key.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.inp_key)
 
         layout.addWidget(field_label("User-ID"))
-        self.inp_user = QLineEdit(config.rule34_user_id)
+        self.inp_user = QLineEdit(config.rule34.user_id)
         layout.addWidget(self.inp_user)
 
         layout.addWidget(field_label("Tags / Charaktere (eine Suche pro Zeile)"))
-        self.inp_tags = QPlainTextEdit(config.rule34_tags)
+        self.inp_tags = QPlainTextEdit(config.rule34.tags)
         self.inp_tags.setPlaceholderText(
             "z. B. character_name other_tag\noder eine Suche pro Zeile"
         )
@@ -113,11 +113,11 @@ class Rule34Dialog(QDialog):
         layout.addWidget(field_label("Anzahl der neuesten Posts"))
         self.spin_count = QSpinBox()
         self.spin_count.setRange(1, 200)
-        self.spin_count.setValue(config.rule34_count)
+        self.spin_count.setValue(config.rule34.count)
         layout.addWidget(self.spin_count)
 
         self.chk_webm = QCheckBox("Nur Videos (webm)")
-        self.chk_webm.setChecked(config.rule34_webm)
+        self.chk_webm.setChecked(config.rule34.webm)
         layout.addWidget(self.chk_webm)
 
         self.chk_reset = QCheckBox("Cache zurücksetzen (neueste Posts erneut holen)")
@@ -225,7 +225,7 @@ class Rule34Dialog(QDialog):
         """Rebuild the preset list and optionally select one entry."""
         self.combo_saved_tags.clear()
         self.combo_saved_tags.addItem("Gespeicherte Tag-Configs …", "")
-        for name in sorted(self.config.rule34_saved_tags, key=str.casefold):
+        for name in sorted(self.config.rule34.saved_tags, key=str.casefold):
             self.combo_saved_tags.addItem(name, name)
         if selected:
             self.combo_saved_tags.setCurrentIndex(
@@ -236,7 +236,7 @@ class Rule34Dialog(QDialog):
         """Replace the tag field with the selected saved preset."""
         name = self.combo_saved_tags.currentData()
         if name:
-            self.inp_tags.setPlainText(self.config.rule34_saved_tags[name])
+            self.inp_tags.setPlainText(self.config.rule34.saved_tags[name])
 
     def _save_saved_tags(self) -> None:
         """Store the current tag text under a name the user chooses."""
@@ -252,7 +252,7 @@ class Rule34Dialog(QDialog):
             return
         # An existing name is overwritten on purpose: that is how a preset
         # gets updated after the user changed the tags.
-        self.config.rule34_saved_tags[name] = text
+        self.config.rule34.saved_tags[name] = text
         save_configs(self.configs, self.config.db_path)
         self._refresh_saved_tags(name)
 
@@ -266,7 +266,7 @@ class Rule34Dialog(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self.config.rule34_saved_tags.pop(name, None)
+        self.config.rule34.saved_tags.pop(name, None)
         save_configs(self.configs, self.config.db_path)
         self._refresh_saved_tags()
 
@@ -296,11 +296,11 @@ class Rule34Dialog(QDialog):
     def settings(self) -> dict[str, Any]:
         """Return the entered settings as config field values."""
         return {
-            "rule34_api_key": self.inp_key.text().strip(),
-            "rule34_user_id": self.inp_user.text().strip(),
-            "rule34_tags": "\n".join(split_queries(self.inp_tags.toPlainText())),
-            "rule34_count": self.spin_count.value(),
-            "rule34_webm": self.chk_webm.isChecked(),
+            "api_key": self.inp_key.text().strip(),
+            "user_id": self.inp_user.text().strip(),
+            "tags": "\n".join(split_queries(self.inp_tags.toPlainText())),
+            "count": self.spin_count.value(),
+            "webm": self.chk_webm.isChecked(),
         }
 
 

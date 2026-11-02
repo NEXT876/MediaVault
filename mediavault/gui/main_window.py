@@ -812,23 +812,23 @@ class MainWindow(QMainWindow):
         if not dlg.exec():
             return
         for key, value in dlg.settings().items():
-            setattr(self.config, key, value)
+            setattr(self.config.rule34, key, value)
         save_configs(self.configs, self.config.db_path)
 
         # The reset option ignores the stored IDs; the import still skips
         # files that are already stored locally.
         last_ids: dict[str, int] = (
-            {} if dlg.chk_reset.isChecked() else self.config.rule34_last_ids
+            {} if dlg.chk_reset.isChecked() else self.config.rule34.last_ids
         )
         db = self.db
         worker = Worker(
             self,
             self._load_rule34_preview,
-            api_key=self.config.rule34_api_key,
-            user_id=self.config.rule34_user_id,
-            tags=self.config.rule34_tags,
-            webm=self.config.rule34_webm,
-            limit=self.config.rule34_count,
+            api_key=self.config.rule34.api_key,
+            user_id=self.config.rule34.user_id,
+            tags=self.config.rule34.tags,
+            webm=self.config.rule34.webm,
+            limit=self.config.rule34.count,
             last_ids=last_ids,
         )
         self._rule34_fetch = worker
@@ -912,12 +912,12 @@ class MainWindow(QMainWindow):
         """Add a rule34 import to the background queue."""
         self.downloads_page.enqueue(
             label=(
-                f"{self.config.rule34_tags or 'ohne Tags'} · "
+                f"{self.config.rule34.tags or 'ohne Tags'} · "
                 f"{len(selected_ids)} Posts"
             ),
             db=db,
             folder=self.config.folder,
-            tags=self.config.rule34_tags,
+            tags=self.config.rule34.tags,
             posts=posts,
             selected_ids=selected_ids,
             newest_ids=newest_ids,
@@ -936,7 +936,7 @@ class MainWindow(QMainWindow):
                 None,
             )
             if config is not None and job.newest_ids:
-                config.rule34_last_ids.update(job.newest_ids)
+                config.rule34.last_ids.update(job.newest_ids)
                 save_configs(self.configs, self.config.db_path)
         if job.imported and job.db is self.db:
             self.refresh_data()

@@ -9,6 +9,7 @@ from mediavault.config import (
     MODE_AI,
     MODE_NORMAL,
     LibraryRoot,
+    Rule34Settings,
     VaultConfig,
     create_config,
     load_configs,
@@ -214,13 +215,13 @@ def test_folder_last_sync_defaults_and_round_trips(tmp_path):
 def test_rule34_settings_default_for_old_config():
     config = VaultConfig.from_dict({"name": "Alt"})
 
-    assert config.rule34_api_key == ""
-    assert config.rule34_user_id == ""
-    assert config.rule34_tags == ""
-    assert config.rule34_count == 10
-    assert config.rule34_webm is False
-    assert config.rule34_last_ids == {}
-    assert config.rule34_saved_tags == {}
+    assert config.rule34.api_key == ""
+    assert config.rule34.user_id == ""
+    assert config.rule34.tags == ""
+    assert config.rule34.count == 10
+    assert config.rule34.webm is False
+    assert config.rule34.last_ids == {}
+    assert config.rule34.saved_tags == {}
 
 
 def test_rule34_settings_round_trip(tmp_path):
@@ -229,13 +230,14 @@ def test_rule34_settings_round_trip(tmp_path):
         "A",
         MODE_NORMAL,
         "a.json",
-        "",
-        "key",
-        "42",
-        "cat dog",
-        25,
-        True,
-        {"cat dog|webm": 7},
+        rule34=Rule34Settings(
+            api_key="key",
+            user_id="42",
+            tags="cat dog",
+            count=25,
+            webm=True,
+            last_ids={"cat dog|webm": 7},
+        ),
     )
 
     save_configs([config], config.db_path, str(path))
@@ -247,16 +249,16 @@ def test_rule34_settings_round_trip(tmp_path):
 def test_rule34_saved_tags_round_trip_and_coercion(tmp_path):
     path = tmp_path / "configs.json"
     config = VaultConfig("A", MODE_NORMAL, "a.json")
-    config.rule34_saved_tags = {"Abends": "cat dog\nfox", "Leer": " "}
+    config.rule34.saved_tags = {"Abends": "cat dog\nfox", "Leer": " "}
 
     save_configs([config], config.db_path, str(path))
     loaded, _last = load_configs(str(path))
 
     # Empty presets are dropped while loading.
-    assert loaded[0].rule34_saved_tags == {"Abends": "cat dog\nfox"}
+    assert loaded[0].rule34.saved_tags == {"Abends": "cat dog\nfox"}
     assert VaultConfig.from_dict(
         {"name": "B", "rule34_saved_tags": {"ok": "cat", "": "x", 3: "y"}}
-    ).rule34_saved_tags == {"ok": "cat"}
+    ).rule34.saved_tags == {"ok": "cat"}
 
 
 def test_rule34_settings_are_coerced_from_stored_data():
@@ -270,7 +272,53 @@ def test_rule34_settings_are_coerced_from_stored_data():
     )
     invalid = VaultConfig.from_dict({"name": "C", "rule34_count": "viele"})
 
-    assert config.rule34_count == 1000
-    assert config.rule34_webm is True
-    assert config.rule34_last_ids == {"ok": 5}
-    assert invalid.rule34_count == 10
+    assert config.rule34.count == 1000
+    assert config.rule34.webm is True
+    assert config.rule34.last_ids == {"ok": 5}
+    assert invalid.rule34.count == 10
+
+
+def test_legacy_flat_rule34_keys_are_migrated(tmp_path):
+    path = tmp_path / "configs.json"
+    path.write_text(
+        json.dumps(
+            {
+                "last": "a.json",
+                "configs": [
+                    {
+                        "name": "Alt",
+                        "db_path": "a.json",
+                        "rule34_api_key": "key",
+                        "rule34_tags": "cat",
+                        "rule34_count": 5,
+                        "rule34_last_ids": {"cat|": 3},
+                        "rule34_saved_tags": {"Preset": "cat"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded, _last = load_configs(str(path))
+    assert loaded[0].rule34 == Rule34Settings(
+        api_key="key",
+        tags="cat",
+        count=5,
+        last_ids={"cat|": 3},
+        saved_tags={"Preset": "cat"},
+    )
+
+    save_configs(loaded, "a.json", str(path))
+    stored = json.loads(path.read_text(encoding="utf-8"))["configs"][0]
+    assert stored["rule34"]["api_key"] == "key"
+    assert not any(key.startswith("rule34_") for key in stored)
+    assert load_configs(str(path))[0] == loaded
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-Dateirechte")
+def test_configs_file_is_private(tmp_path):
+    path = tmp_path / "configs.json"
+    save_configs([VaultConfig("A", MODE_NORMAL, "a.json")], "a.json", str(path))
+
+    assert (os.stat(path).st_mode & 0o777) == 0o600
