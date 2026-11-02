@@ -287,8 +287,12 @@ def test_fetch_preview_returns_none_on_error_or_bad_scheme():
     def failing(request, timeout=None):
         raise OSError("no network")
 
+    def unused(request, timeout=None):
+        raise AssertionError("non-http URLs must not be opened")
+
     assert fetch_preview("https://example.test/thumb.jpg", opener=failing) is None
-    assert fetch_preview("file:///etc/passwd", opener=failing) is None
+    assert fetch_preview("file:///etc/passwd", opener=unused) is None
+    assert fetch_preview("ftp://example.test/a.jpg", opener=unused) is None
 
 
 def test_fetch_posts_wraps_truncated_response():
@@ -299,7 +303,7 @@ def test_fetch_posts_wraps_truncated_response():
         fetch_posts("secret-key", "42", "cat", False, 5, opener=failing)
 
 
-def test_download_post_writes_file_atomically(tmp_path):
+def test_download_post_writes_file_and_leaves_no_part_file(tmp_path):
     post = Post(7, "https://example.test/files/abc.PNG")
 
     path = download_post(post, str(tmp_path), opener=_bytes_opener(b"image"))

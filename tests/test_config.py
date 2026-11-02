@@ -1,17 +1,22 @@
 import json
+import os
 
 import pytest
 
+from mediavault import volumes
 from mediavault.config import (
     DEFAULT_DB_PATH,
     MODE_AI,
     MODE_NORMAL,
+    LibraryRoot,
+    Rule34Settings,
     VaultConfig,
     create_config,
-    find_new_images,
     load_configs,
+    locate,
     save_configs,
 )
+from mediavault.scanner import find_new_media
 
 
 def _touch(path):
@@ -101,7 +106,7 @@ def test_create_config_makes_unique_paths(tmp_path):
     assert first.mode == MODE_AI
 
 
-def test_find_new_images_recurses_and_skips_known(tmp_path):
+def test_find_new_media_recurses_and_skips_known(tmp_path):
     known = tmp_path / "a.png"
     new_nested = tmp_path / "sub" / "b.JPG"
     ignored = tmp_path / "c.txt"
@@ -109,22 +114,89 @@ def test_find_new_images_recurses_and_skips_known(tmp_path):
     _touch(new_nested)
     _touch(ignored)
 
-    found = find_new_images(str(tmp_path), [str(known)])
+    images, videos = find_new_media(str(tmp_path), [str(known)])
 
-    assert found == [str(new_nested)]
+    assert images == [str(new_nested)]
+    assert videos == []
 
 
-def test_find_new_images_can_limit_to_png(tmp_path):
+def test_find_new_media_splits_images_and_videos(tmp_path):
+    _touch(tmp_path / "a.png")
+    _touch(tmp_path / "sub" / "b.mp4")
+    _touch(tmp_path / "notes.txt")
+
+    images, videos = find_new_media(str(tmp_path), [])
+
+    assert [os.path.basename(path) for path in images] == ["a.png"]
+    assert [os.path.basename(path) for path in videos] == ["b.mp4"]
+
+
+def test_find_new_media_can_limit_the_types(tmp_path):
     _touch(tmp_path / "a.png")
     _touch(tmp_path / "b.jpg")
+    _touch(tmp_path / "c.mp4")
 
-    found = find_new_images(str(tmp_path), [], {".png"})
+    images, videos = find_new_media(
+        str(tmp_path), [], image_exts={".png"}, video_exts=()
+    )
 
-    assert found == [str(tmp_path / "a.png")]
+    assert images == [str(tmp_path / "a.png")]
+    assert videos == []
 
 
-def test_find_new_images_missing_folder_returns_empty(tmp_path):
-    assert find_new_images(str(tmp_path / "nope"), []) == []
+def test_find_new_media_skips_known_relative_paths(tmp_path):
+    _touch(tmp_path / "a.png")
+
+    images, _videos = find_new_media(str(tmp_path), ["a.png"], root=str(tmp_path))
+
+    assert images == []
+
+
+def test_find_new_media_missing_folder_returns_empty(tmp_path):
+    assert find_new_media(str(tmp_path / "nope"), []) == ([], [])
+
+
+def _volume_config(tmp_path, folder_rel="Media"):
+    """Create a config bound to a freshly marked volume."""
+    root = tmp_path / "stick"
+    root.mkdir()
+    info = volumes.write_marker(str(root), label="Stick")
+    config = VaultConfig(
+        name="Stick",
+        db_path="s.json",
+        volume_uuid=info.uuid,
+        volume_label=info.label,
+        folder_rel=folder_rel,
+    )
+    return root, config
+
+
+def test_locate_reports_an_unplugged_volume(monkeypatch, tmp_path):
+    root, config = _volume_config(tmp_path)
+
+    monkeypatch.setattr(volumes, "mounted_roots", list)
+    assert locate(config) == LibraryRoot()
+    assert not locate(config).available
+
+    monkeypatch.setattr(volumes, "mounted_roots", lambda: [str(root)])
+    location = locate(config)
+    assert (location.volume, location.folder) == (str(root), str(root / "Media"))
+    assert location.available
+
+
+def test_locate_treats_an_empty_folder_as_the_volume_root(monkeypatch, tmp_path):
+    root, config = _volume_config(tmp_path, folder_rel="")
+    monkeypatch.setattr(volumes, "mounted_roots", lambda: [str(root)])
+
+    location = locate(config)
+
+    assert (location.volume, location.folder) == (str(root), str(root))
+
+
+def test_locate_keeps_a_local_config_on_its_folder(tmp_path):
+    config = VaultConfig(name="Lokal", db_path="l.json", folder=str(tmp_path))
+
+    assert locate(config) == LibraryRoot(folder=str(tmp_path))
 
 
 def test_folder_last_sync_defaults_and_round_trips(tmp_path):
@@ -143,28 +215,29 @@ def test_folder_last_sync_defaults_and_round_trips(tmp_path):
 def test_rule34_settings_default_for_old_config():
     config = VaultConfig.from_dict({"name": "Alt"})
 
-    assert config.rule34_api_key == ""
-    assert config.rule34_user_id == ""
-    assert config.rule34_tags == ""
-    assert config.rule34_count == 10
-    assert config.rule34_webm is False
-    assert config.rule34_last_ids == {}
-    assert config.rule34_saved_tags == {}
+    assert config.rule34.api_key == ""
+    assert config.rule34.user_id == ""
+    assert config.rule34.tags == ""
+    assert config.rule34.count == 10
+    assert config.rule34.webm is False
+    assert config.rule34.last_ids == {}
+    assert config.rule34.saved_tags == {}
 
 
 def test_rule34_settings_round_trip(tmp_path):
     path = tmp_path / "configs.json"
     config = VaultConfig(
-        "A",
-        MODE_NORMAL,
-        "a.json",
-        "",
-        "key",
-        "42",
-        "cat dog",
-        25,
-        True,
-        {"cat dog|webm": 7},
+        name="A",
+        mode=MODE_NORMAL,
+        db_path="a.json",
+        rule34=Rule34Settings(
+            api_key="key",
+            user_id="42",
+            tags="cat dog",
+            count=25,
+            webm=True,
+            last_ids={"cat dog|webm": 7},
+        ),
     )
 
     save_configs([config], config.db_path, str(path))
@@ -176,16 +249,16 @@ def test_rule34_settings_round_trip(tmp_path):
 def test_rule34_saved_tags_round_trip_and_coercion(tmp_path):
     path = tmp_path / "configs.json"
     config = VaultConfig("A", MODE_NORMAL, "a.json")
-    config.rule34_saved_tags = {"Abends": "cat dog\nfox", "Leer": " "}
+    config.rule34.saved_tags = {"Abends": "cat dog\nfox", "Leer": " "}
 
     save_configs([config], config.db_path, str(path))
     loaded, _last = load_configs(str(path))
 
     # Empty presets are dropped while loading.
-    assert loaded[0].rule34_saved_tags == {"Abends": "cat dog\nfox"}
+    assert loaded[0].rule34.saved_tags == {"Abends": "cat dog\nfox"}
     assert VaultConfig.from_dict(
         {"name": "B", "rule34_saved_tags": {"ok": "cat", "": "x", 3: "y"}}
-    ).rule34_saved_tags == {"ok": "cat"}
+    ).rule34.saved_tags == {"ok": "cat"}
 
 
 def test_rule34_settings_are_coerced_from_stored_data():
@@ -199,7 +272,53 @@ def test_rule34_settings_are_coerced_from_stored_data():
     )
     invalid = VaultConfig.from_dict({"name": "C", "rule34_count": "viele"})
 
-    assert config.rule34_count == 1000
-    assert config.rule34_webm is True
-    assert config.rule34_last_ids == {"ok": 5}
-    assert invalid.rule34_count == 10
+    assert config.rule34.count == 1000
+    assert config.rule34.webm is True
+    assert config.rule34.last_ids == {"ok": 5}
+    assert invalid.rule34.count == 10
+
+
+def test_legacy_flat_rule34_keys_are_migrated(tmp_path):
+    path = tmp_path / "configs.json"
+    path.write_text(
+        json.dumps(
+            {
+                "last": "a.json",
+                "configs": [
+                    {
+                        "name": "Alt",
+                        "db_path": "a.json",
+                        "rule34_api_key": "key",
+                        "rule34_tags": "cat",
+                        "rule34_count": 5,
+                        "rule34_last_ids": {"cat|": 3},
+                        "rule34_saved_tags": {"Preset": "cat"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded, _last = load_configs(str(path))
+    assert loaded[0].rule34 == Rule34Settings(
+        api_key="key",
+        tags="cat",
+        count=5,
+        last_ids={"cat|": 3},
+        saved_tags={"Preset": "cat"},
+    )
+
+    save_configs(loaded, "a.json", str(path))
+    stored = json.loads(path.read_text(encoding="utf-8"))["configs"][0]
+    assert stored["rule34"]["api_key"] == "key"
+    assert not any(key.startswith("rule34_") for key in stored)
+    assert load_configs(str(path))[0] == loaded
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-Dateirechte")
+def test_configs_file_is_private(tmp_path):
+    path = tmp_path / "configs.json"
+    save_configs([VaultConfig("A", MODE_NORMAL, "a.json")], "a.json", str(path))
+
+    assert (os.stat(path).st_mode & 0o777) == 0o600

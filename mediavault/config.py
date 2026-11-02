@@ -8,6 +8,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from mediavault import volumes
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(
@@ -16,7 +18,36 @@ DEFAULT_DB_PATH = os.path.join(
 CONFIGS_PATH = os.path.join(os.path.expanduser("~"), ".mediavault", "configs.json")
 MODE_NORMAL = "normal"
 MODE_AI = "ai"
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+
+
+@dataclass
+class Rule34Settings:
+    """Credentials and search state of the optional rule34 integration."""
+
+    api_key: str = ""
+    user_id: str = ""
+    tags: str = ""
+    count: int = 10
+    webm: bool = False
+    last_ids: dict[str, int] = field(default_factory=dict)
+    saved_tags: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], prefix: str = "") -> "Rule34Settings":
+        """Build settings from stored data; prefix reads the old flat keys."""
+
+        def get(key: str) -> Any:
+            return data.get(prefix + key)
+
+        return cls(
+            api_key=str(get("api_key") or ""),
+            user_id=str(get("user_id") or ""),
+            tags=str(get("tags") or ""),
+            count=_int_setting(get("count"), 10, 1, 1000),
+            webm=_bool_setting(get("webm")),
+            last_ids=_last_ids(get("last_ids")),
+            saved_tags=_saved_tags(get("saved_tags")),
+        )
 
 
 @dataclass
@@ -27,33 +58,38 @@ class VaultConfig:
     mode: str = MODE_NORMAL
     db_path: str = ""
     folder: str = ""
-    rule34_api_key: str = ""
-    rule34_user_id: str = ""
-    rule34_tags: str = ""
-    rule34_count: int = 10
-    rule34_webm: bool = False
-    rule34_last_ids: dict[str, int] = field(default_factory=dict)
-    # Appended last so existing positional construction keeps working.
     folder_last_sync: str = ""
-    rule34_saved_tags: dict[str, str] = field(default_factory=dict)
+    # Set for configs whose media lives on a removable volume; folder_rel is
+    # then the location inside that volume, not an absolute path.
+    volume_uuid: str = ""
+    volume_label: str = ""
+    folder_rel: str = ""
+    rule34: Rule34Settings = field(default_factory=Rule34Settings)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
-        """Build a config from stored data, falling back to safe defaults."""
+        """Build a config from stored data, falling back to safe defaults.
+
+        Files written before Rule34Settings existed keep the rule34 values as
+        flat "rule34_*" keys; they are still read.
+        """
         mode = data.get("mode", MODE_NORMAL)
+        nested = data.get("rule34")
+        rule34 = (
+            Rule34Settings.from_dict(nested)
+            if isinstance(nested, Mapping)
+            else Rule34Settings.from_dict(data, prefix="rule34_")
+        )
         return cls(
             name=str(data.get("name") or "Unbenannt"),
             mode=mode if mode in (MODE_NORMAL, MODE_AI) else MODE_NORMAL,
             db_path=str(data.get("db_path") or DEFAULT_DB_PATH),
             folder=str(data.get("folder") or ""),
-            rule34_api_key=str(data.get("rule34_api_key") or ""),
-            rule34_user_id=str(data.get("rule34_user_id") or ""),
-            rule34_tags=str(data.get("rule34_tags") or ""),
-            rule34_count=_int_setting(data.get("rule34_count"), 10, 1, 1000),
-            rule34_webm=_bool_setting(data.get("rule34_webm")),
-            rule34_last_ids=_last_ids(data.get("rule34_last_ids")),
             folder_last_sync=str(data.get("folder_last_sync") or ""),
-            rule34_saved_tags=_saved_tags(data.get("rule34_saved_tags")),
+            volume_uuid=str(data.get("volume_uuid") or ""),
+            volume_label=str(data.get("volume_label") or ""),
+            folder_rel=str(data.get("folder_rel") or ""),
+            rule34=rule34,
         )
 
 
@@ -117,7 +153,7 @@ def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
         config = _default_config()
         return [config], config.db_path
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         logger.warning("Configs konnten nicht gelesen werden: %s", path)
@@ -148,8 +184,14 @@ def save_configs(
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     data = {"last": last, "configs": [asdict(config) for config in configs]}
     tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    # The file holds API credentials: keep it private to the user.
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        logger.debug("Rechte nicht setzbar: %s", tmp_path, exc_info=True)
     os.replace(tmp_path, path)
 
 
@@ -165,6 +207,9 @@ def create_config(
     folder: str = "",
     existing: Iterable[VaultConfig] = (),
     base_dir: str | None = None,
+    volume_uuid: str = "",
+    volume_label: str = "",
+    folder_rel: str = "",
 ) -> VaultConfig:
     """Create a config with a unique database path, without saving it."""
     base_dir = base_dir or os.path.join(os.path.expanduser("~"), ".mediavault", "data")
@@ -179,29 +224,37 @@ def create_config(
         mode=mode if mode in (MODE_NORMAL, MODE_AI) else MODE_NORMAL,
         db_path=os.path.join(base_dir, f"{candidate}.json"),
         folder=folder,
+        volume_uuid=volume_uuid,
+        volume_label=volume_label,
+        folder_rel=folder_rel,
     )
 
 
-def find_new_images(
-    folder: str,
-    known_paths: Iterable[str],
-    extensions: Iterable[str] = IMAGE_EXTS,
-) -> list[str]:
-    """Return image paths in ``folder`` that are not yet known."""
-    if not os.path.isdir(folder):
-        logger.warning("Ordner nicht gefunden: %s", folder)
-        return []
-    known = {os.path.normcase(os.path.abspath(path)) for path in known_paths}
-    allowed = {extension.casefold() for extension in extensions}
-    found: list[str] = []
-    for root, _dirs, files in os.walk(folder):
-        for name in files:
-            if os.path.splitext(name)[1].casefold() not in allowed:
-                continue
-            path = os.path.join(root, name)
-            if os.path.normcase(os.path.abspath(path)) not in known:
-                found.append(path)
-    return sorted(found)
+@dataclass(frozen=True)
+class LibraryRoot:
+    """Where a config's media lives right now.
+
+    volume is the mount point stored paths are relative to (empty for local
+    configs), folder the directory to scan (empty while unplugged).
+    """
+
+    volume: str = ""
+    folder: str = ""
+
+    @property
+    def available(self) -> bool:
+        """Return True when the media folder can be read right now."""
+        return bool(self.folder)
+
+
+def locate(config: VaultConfig) -> LibraryRoot:
+    """Resolve a config's volume mount and scan folder with a single probe."""
+    if not config.volume_uuid:
+        return LibraryRoot(folder=config.folder)
+    root = volumes.find_volume(config.volume_uuid)
+    if not root:
+        return LibraryRoot()
+    return LibraryRoot(volume=root, folder=volumes.folder_path(root, config.folder_rel))
 
 
 def setup_logging() -> None:

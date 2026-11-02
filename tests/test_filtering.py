@@ -67,10 +67,31 @@ def test_sort_modes():
         "alpha",
         "Gamma",
     ]
+    assert _titles(visible_entries(entries, "", "", "last_watched"))[0] == "Gamma"
+
+
+def test_score_ties_are_broken_by_title_not_input_order():
+    entries = [
+        MediaItem("b", score=50),
+        MediaItem("C", score=50),
+        MediaItem("a", score=50),
+    ]
+
+    assert _titles(visible_entries(entries, "", "", "score_desc")) == ["a", "b", "C"]
+    assert _titles(visible_entries(entries, "", "", "score_asc")) == ["a", "b", "C"]
+
+
+def test_last_watched_puts_unwatched_entries_last():
+    entries = [
+        MediaItem("never"),
+        MediaItem("old", last_watched=5),
+        MediaItem("new", last_watched=50),
+    ]
+
     assert _titles(visible_entries(entries, "", "", "last_watched")) == [
-        "Gamma",
-        "Beta",
-        "alpha",
+        "new",
+        "old",
+        "never",
     ]
 
 

@@ -192,9 +192,9 @@ def _ai_entry(title, prompt, score, model="m", sampler="euler"):
 
 def test_summarize_prompts_counts_tags_models_and_scores():
     entries = [
+        _ai_entry("C", "(Castle), forest", 30),
         _ai_entry("A", "castle, (dawn:1.2)", 90),
         _ai_entry("B", "castle, forest", 60),
-        _ai_entry("C", "(Castle), forest", 30),
         MediaItem("D", score=100),  # ignored, no prompt
     ]
 
@@ -203,6 +203,8 @@ def test_summarize_prompts_counts_tags_models_and_scores():
     assert summary["count"] == 3
     assert summary["average_score"] == 60
     assert summary["top_tags"][0] == ("castle", 3)
+    assert ("dawn", 1) in summary["top_tags"]
+    assert ("forest", 2) in summary["top_tags"]
     assert summary["models"] == [("m", 3)]
     assert summary["samplers"] == [("euler", 3)]
     assert summary["top_tags_by_score"][0] == ("castle", 3, 60)

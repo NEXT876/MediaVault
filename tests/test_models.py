@@ -9,16 +9,18 @@ from mediavault.models import MediaDatabase, MediaItem
 def test_round_trip_preserves_all_fields(tmp_path):
     path = tmp_path / "m.json"
     entry = MediaItem(
-        "Titel",
-        "bild.png",
-        77,
-        "Beschreibung",
-        "Videos",
-        "video.mp4",
-        3,
-        123.5,
-        2,
-        "Gruppe",
+        title="Titel",
+        image_path="bild.png",
+        score=77,
+        description="Beschreibung",
+        entry_type="Videos",
+        video_link="video.mp4",
+        watched_counter=3,
+        last_watched=123.5,
+        rating_count=2,
+        group="Gruppe",
+        ai_meta={"seed": 1},
+        content_hash="abc",
     )
     db = MediaDatabase(str(path))
     db.add(entry)
@@ -95,34 +97,43 @@ def test_corrupt_json_is_backed_up(tmp_path, content):
     assert backups[0].read_text(encoding="utf-8") == content
 
 
-def test_smart_weights_follow_formula(monkeypatch):
-    now = 1_000_000.0
-    entries = [
-        MediaItem("fresh", score=80),
-        MediaItem("recent", score=50, watched_counter=2, last_watched=now - 3600),
-        MediaItem("week", score=10, watched_counter=1, last_watched=now - 2 * 86400),
-        MediaItem("low", score=1, watched_counter=100),
-    ]
+def _smart_weights(monkeypatch, entries, now):
+    """Return the weights get_random(smart=True) hands to random.choices."""
     captured = {}
 
     def fake_choices(population, weights, k):
-        captured["weights"] = weights
+        captured.update(zip((entry.title for entry in population), weights, strict=True))
         return [population[0]]
 
     monkeypatch.setattr(random, "choices", fake_choices)
     monkeypatch.setattr(models.time, "time", lambda: now)
-    db = MediaDatabase("unused.json")
-    db.entries = entries
+    MediaDatabase("unused.json").get_random(entries, smart=True)
+    return captured
 
-    assert db.get_random(entries, smart=True) is entries[0]
-    assert captured["weights"] == pytest.approx(
+
+def test_smart_weights_prefer_high_scores_and_unwatched(monkeypatch):
+    now = 1_000_000.0
+    weights = _smart_weights(
+        monkeypatch,
         [
-            (80 + 20),
-            (50 + 20) * 0.85**2 * 0.3,
-            (10 + 20) * 0.85 * 0.6,
-            1.0,
-        ]
+            MediaItem("high", score=90),
+            MediaItem("low", score=10),
+            MediaItem("watched_often", score=90, watched_counter=10),
+            MediaItem("just_watched", score=90, last_watched=now - 3600),
+            MediaItem("watched_days_ago", score=90, last_watched=now - 3 * 86400),
+            MediaItem("watched_long_ago", score=90, last_watched=now - 30 * 86400),
+            MediaItem("worthless", score=0, watched_counter=500),
+        ],
+        now,
     )
+
+    assert weights["high"] > weights["low"]
+    assert weights["high"] > weights["watched_often"]
+    assert weights["just_watched"] < weights["watched_days_ago"]
+    assert weights["watched_days_ago"] < weights["watched_long_ago"]
+    assert weights["watched_long_ago"] == pytest.approx(weights["high"])
+    # Every entry keeps a chance to be picked.
+    assert weights["worthless"] > 0
 
 
 def test_recent_picks_are_excluded_unless_whole_pool(monkeypatch):
@@ -133,3 +144,30 @@ def test_recent_picks_are_excluded_unless_whole_pool(monkeypatch):
     assert db.get_random([first, second], recent_picks=[first]) is second
     assert db.get_random([first], recent_picks=[first]) is first
     assert db.get_random([]) is None
+
+
+def test_media_type_is_stored_as_plain_value(tmp_path):
+    from mediavault.models import MediaDatabase, MediaType
+
+    path = tmp_path / "m.json"
+    db = MediaDatabase(str(path))
+    db.entries = [MediaItem("v", entry_type=MediaType.VIDEO, video_link="v.mp4")]
+    db.save()
+
+    assert '"entry_type": "Videos"' in path.read_text(encoding="utf-8")
+    loaded = MediaDatabase(str(path))
+    loaded.load()
+    assert loaded.entries[0].entry_type == MediaType.VIDEO
+    assert loaded.get_by_type(MediaType.VIDEO) == loaded.entries
+    assert str(MediaType.IMAGE) == "Bilder" and f"{MediaType.VIDEO}" == "Videos"
+
+
+def test_file_path_prefers_video_over_preview_image():
+    from mediavault.models import MediaType
+
+    entry = MediaItem(
+        "v", image_path="p.png", entry_type=MediaType.VIDEO, video_link="v.mp4"
+    )
+
+    assert entry.file_path == "v.mp4"
+    assert entry.media_path == "p.png"
