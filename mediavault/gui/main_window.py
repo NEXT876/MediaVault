@@ -11,7 +11,6 @@ from PyQt6.QtCore import (
     QEvent,
     QObject,
     QPoint,
-    QRect,
     Qt,
     QTimer,
 )
@@ -34,7 +33,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QRubberBand,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
@@ -62,6 +60,7 @@ from mediavault.gui.dialogs import (
 )
 from mediavault.gui.downloads import DownloadJob, DownloadsPage, JobState
 from mediavault.gui.rule34_dialog import Rule34Dialog, Rule34PreviewDialog
+from mediavault.gui.selection import RubberBandSelector
 from mediavault.gui.stick_banner import StickBanner
 from mediavault.gui.stick_dialog import StickDialog
 from mediavault.gui.theme import ThemeManager
@@ -129,8 +128,6 @@ class MainWindow(QMainWindow):
 
     GRID_SPACING = 12
     SCROLLBAR_RESERVE = 12
-    AUTOSCROLL_MARGIN = 24
-    AUTOSCROLL_STEP = 28
 
     def __init__(self, theme_manager: ThemeManager | None = None) -> None:
         """Initialize the database, view state and the full user interface."""
@@ -163,11 +160,6 @@ class MainWindow(QMainWindow):
 
         self._anchor_entry: MediaItem | None = None
         self._press_snapshot: set[MediaItem] = set()
-        self._drag_base: set[MediaItem] = set()
-        self._drag_origin_global: QPoint | None = None
-        self._last_drag_global: QPoint | None = None
-        self._rubber_band: QRubberBand | None = None
-        self._autoscroll_direction = 0
         # Paths the last folder sync could not import; hidden from later syncs.
         self._sync_ignored: set[str] = set()
         # Last resolved media location, used to notice a plugged or pulled volume.
@@ -175,10 +167,6 @@ class MainWindow(QMainWindow):
 
         # The worker that fetches rule34 posts before the preview opens.
         self._rule34_fetch: Worker | None = None
-
-        self._autoscroll_timer = QTimer(self)
-        self._autoscroll_timer.setInterval(40)
-        self._autoscroll_timer.timeout.connect(self._autoscroll_step)
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -191,6 +179,9 @@ class MainWindow(QMainWindow):
         self._spinner_timer.timeout.connect(self._spin)
 
         self._setup_ui()
+        self._rubber = RubberBandSelector(
+            self.scroll_area, lambda: self.cards, self._apply_selection
+        )
         self._sync_theme_button()
         self._apply_config_ui()
         self.refresh_data()
@@ -1227,42 +1218,14 @@ class MainWindow(QMainWindow):
         self.lbl_hint.setVisible(count == 0)
 
     # --- Rubber-band selection ---
-    def _ensure_rubber_band(self) -> QRubberBand:
-        """Create the selection rectangle on first use."""
-        if self._rubber_band is None:
-            self._rubber_band = QRubberBand(
-                QRubberBand.Shape.Rectangle, self.scroll_area.viewport()
-            )
-            self._rubber_band.setAttribute(
-                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-            )
-        return self._rubber_band
-
     def _on_drag_pressed(self, entry: MediaItem, global_pos: QPoint) -> None:
         """Capture the starting selection before the first click."""
         self._press_snapshot = set(self.selected_entries)
-        self._drag_base = set(self.selected_entries)
-        self._drag_origin_global = global_pos
-        self._last_drag_global = global_pos
+        self._rubber.press(global_pos, self.selected_entries)
 
     def _on_drag_moved(self, global_pos: QPoint) -> None:
-        """Draw the selection rectangle and select the cards it touches."""
-        if self._drag_origin_global is None:
-            return
-        self._last_drag_global = global_pos
-        viewport = self.scroll_area.viewport()
-        origin = viewport.mapFromGlobal(self._drag_origin_global)
-        current = viewport.mapFromGlobal(global_pos)
-        rect = QRect(origin, current).normalized().intersected(viewport.rect())
-
-        band = self._ensure_rubber_band()
-        band.setGeometry(rect)
-        if not band.isVisible():
-            band.show()
-        band.raise_()
-
-        self._apply_selection(self._drag_base | self._cards_intersecting(rect))
-        self._update_autoscroll(current)
+        """Forward pointer movement to the rubber-band selector."""
+        self._rubber.move(global_pos)
 
     def _on_drag_finished(self) -> None:
         """Finish the rubber-band selection."""
@@ -1270,51 +1233,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_drag(self) -> None:
         """Hide the selection rectangle and stop auto-scrolling."""
-        self._autoscroll_timer.stop()
-        self._autoscroll_direction = 0
-        self._drag_origin_global = None
-        self._last_drag_global = None
-        self._drag_base = set()
-        if self._rubber_band is not None:
-            self._rubber_band.hide()
-            self._rubber_band.setGeometry(QRect())
-
-    def _cards_intersecting(self, rect: QRect) -> set[MediaItem]:
-        """Return all cards intersecting ``rect`` in viewport coordinates."""
-        viewport = self.scroll_area.viewport()
-        hits = set()
-        for card in self.cards:
-            top_left = card.mapTo(viewport, QPoint(0, 0))
-            if rect.intersects(QRect(top_left, card.size())):
-                hits.add(card.entry)
-        return hits
-
-    def _update_autoscroll(self, pos_in_viewport: QPoint) -> None:
-        """Start or stop scrolling at the top or bottom edge."""
-        viewport = self.scroll_area.viewport()
-        direction = 0
-        if pos_in_viewport.y() < self.AUTOSCROLL_MARGIN:
-            direction = -1
-        elif pos_in_viewport.y() > viewport.height() - self.AUTOSCROLL_MARGIN:
-            direction = 1
-        self._autoscroll_direction = direction
-        if direction and not self._autoscroll_timer.isActive():
-            self._autoscroll_timer.start()
-        elif not direction:
-            self._autoscroll_timer.stop()
-
-    def _autoscroll_step(self) -> None:
-        """Advance the scroll position while a rubber-band selection is active."""
-        if not self._autoscroll_direction or self._last_drag_global is None:
-            self._autoscroll_timer.stop()
-            return
-        bar = self.scroll_area.verticalScrollBar()
-        before = bar.value()
-        bar.setValue(before + self._autoscroll_direction * self.AUTOSCROLL_STEP)
-        if bar.value() == before:
-            self._autoscroll_timer.stop()
-            return
-        self._on_drag_moved(self._last_drag_global)
+        self._rubber.cancel()
 
     # --- Keyboard and search ---
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -1329,7 +1248,7 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape:
-            if self._drag_origin_global is not None:
+            if self._rubber.active:
                 self._cancel_drag()
                 self._apply_selection(self._press_snapshot)
             else:

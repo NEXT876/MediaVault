@@ -46,6 +46,7 @@ mediavault/
 ├── media_preview.py   # Videoframes und System-Thumbnails
 └── gui/
     ├── main_window.py # Hauptfenster, Auswahl, Suche, Sortierung
+    ├── selection.py   # Auswahlrechteck mit Auto-Scroll
     ├── widgets.py     # Medienkacheln
     ├── dialogs.py     # Detail-, Bearbeiten- und Gruppen-Dialoge
     ├── file_dialogs.py # Native Dateiauswahl, Dateien öffnen
