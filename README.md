@@ -42,11 +42,13 @@ mediavault/
 ├── __main__.py        # Einstiegspunkt, Splash-Screen
 ├── config.py          # Datenbankpfad und Logging
 ├── models.py          # MediaItem und MediaDatabase (JSON-Persistenz)
-├── utils.py           # Dateidialoge, Öffnen von Medien, Thumbnails
+├── scanner.py         # Neue Medien in einem Ordner finden
+├── media_preview.py   # Videoframes und System-Thumbnails
 └── gui/
     ├── main_window.py # Hauptfenster, Auswahl, Suche, Sortierung
     ├── widgets.py     # Medienkacheln
     ├── dialogs.py     # Detail-, Bearbeiten- und Gruppen-Dialoge
+    ├── file_dialogs.py # Native Dateiauswahl, Dateien öffnen
     └── theme.py       # Dark-/Light-Paletten und QSS
 tests/
 └── test_media_database.py

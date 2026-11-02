@@ -13,11 +13,11 @@ from typing import Any
 from mediavault.config import MODE_NORMAL
 from mediavault.importer import import_paths
 from mediavault.models import MediaDatabase, MediaType
+from mediavault.scanner import is_video
 
 API_URL = "https://api.rule34.xxx/index.php"
 AUTOCOMPLETE_URL = "https://api.rule34.xxx/autocomplete.php"
 USER_AGENT = "MediaVault/1.0"
-VIDEO_EXTS = {".webm", ".mp4", ".m4v", ".mov", ".mkv", ".avi"}
 _MAX_LIMIT = 1000
 _CHUNK = 1024 * 1024
 _SUGGESTION_TIMEOUT = 5
@@ -382,7 +382,7 @@ def download_and_import(
             detail = str(exc) if isinstance(exc, Rule34Error) else type(exc).__name__
             result.failed.append(f"Post {post.id}: {detail}")
         else:
-            media_type = MediaType.VIDEO if _is_video(path) else MediaType.IMAGE
+            media_type = MediaType.VIDEO if is_video(path) else MediaType.IMAGE
             key = (post.group or fallback_group, media_type)
             paths.setdefault(key, []).append(path)
         if progress is not None:
@@ -422,8 +422,3 @@ def fetch_and_import(
         api_key, user_id, tags, webm, limit, last_id, opener=opener
     )
     return download_and_import(db, posts, folder=folder, tags=tags, opener=opener)
-
-
-def _is_video(path: str) -> bool:
-    """Return True if a downloaded file has a video extension."""
-    return os.path.splitext(path)[1].casefold() in VIDEO_EXTS

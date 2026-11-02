@@ -36,10 +36,10 @@ from mediavault.config import (
     locate,
     save_configs,
 )
+from mediavault.gui import file_dialogs
 from mediavault.gui.widgets import field_label, rounded_pixmap
 from mediavault.importer import content_hash
 from mediavault.models import MediaDatabase, MediaItem, MediaType
-from mediavault.utils import OSHelper
 
 
 class DetailDialog(QDialog):
@@ -193,7 +193,7 @@ class DetailDialog(QDialog):
                 else "Die Datei wurde auf dem Stick nicht gefunden.",
             )
             return
-        OSHelper.open_file(path)
+        file_dialogs.open_file(path)
         self.entry.watched_counter += 1
         self.entry.last_watched = time.time()
         self._persist_stats()
@@ -315,7 +315,7 @@ class EditDialog(QDialog):
 
     def _choose_vid(self) -> None:
         """Open a file dialog to choose a video file."""
-        path, _ = OSHelper.pick_file(
+        path, _ = file_dialogs.pick_file(
             self,
             "Video wählen",
             "Videos (*.mp4 *.mkv *.avi *.mov *.webm)",
@@ -325,7 +325,7 @@ class EditDialog(QDialog):
 
     def _choose_img(self) -> None:
         """Open a file dialog to choose an image file."""
-        path, _ = OSHelper.pick_file(
+        path, _ = file_dialogs.pick_file(
             self,
             "Bild wählen",
             "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)",

@@ -45,15 +45,13 @@ from PyQt6.QtWidgets import (
 from mediavault import transfer, volumes
 from mediavault.ai_meta import extract_ai_metadata
 from mediavault.config import (
-    IMAGE_EXTS,
     MODE_AI,
-    VIDEO_EXTS,
     LibraryRoot,
-    find_new_media,
     load_configs,
     locate,
     save_configs,
 )
+from mediavault.gui import file_dialogs
 from mediavault.gui.dialogs import (
     AnalysisDialog,
     ConfigDialog,
@@ -73,8 +71,8 @@ from mediavault.gui.worker import Worker
 from mediavault.importer import find_duplicate, import_paths, norm_path
 from mediavault.models import MediaDatabase, MediaItem, MediaType
 from mediavault.rule34 import Post, collect_new_posts_multi, fetch_preview
+from mediavault.scanner import IMAGE_EXTS, VIDEO_EXTS, find_new_media
 from mediavault.transfer import copy_into_folder
-from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
 
@@ -579,8 +577,7 @@ class MainWindow(QMainWindow):
         if not location.available or not os.path.isdir(location.folder):
             return
         ai = self.config.mode == MODE_AI
-        known = [entry.image_path for entry in self.db.get_by_type(MediaType.IMAGE)]
-        known += [entry.video_link for entry in self.db.get_by_type(MediaType.VIDEO)]
+        known = [entry.file_path for entry in self.db.snapshot()]
         images, videos = find_new_media(
             location.folder,
             known,
@@ -723,7 +720,9 @@ class MainWindow(QMainWindow):
                 self, "Ordner synchronisieren", "Der Ordner wurde nicht gefunden."
             )
             return
-        known = [entry.image_path for entry in self.db.get_by_type(MediaType.IMAGE)]
+        known = [
+            entry.image_path for entry in self.db.get_by_type(MediaType.IMAGE)
+        ]
         known.extend(self._sync_ignored)
         self.btn_sync_folder.setEnabled(False)
         worker = Worker(
@@ -1443,7 +1442,7 @@ class MainWindow(QMainWindow):
         else:
             file_filter = "Videos (*.mp4 *.mkv *.avi *.mov *.webm);;Alle Dateien (*.*)"
 
-        path, _ = OSHelper.pick_file(self, "Datei auswählen", file_filter)
+        path, _ = file_dialogs.pick_file(self, "Datei auswählen", file_filter)
         if not path:
             return
         if not self._library_ready():
@@ -1508,7 +1507,7 @@ class MainWindow(QMainWindow):
             if type_str == MediaType.IMAGE
             else "*.mp4 *.mkv *.avi *.mov *.webm"
         )
-        paths, _ = OSHelper.pick_files(
+        paths, _ = file_dialogs.pick_files(
             self, "Importieren", f"Media ({exts});;Alle (*.*)"
         )
         if not paths:

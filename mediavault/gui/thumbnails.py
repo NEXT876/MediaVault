@@ -15,9 +15,8 @@ import os
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage
 
-from mediavault import volumes
+from mediavault import media_preview, volumes
 from mediavault.models import MediaItem, MediaType
-from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +90,9 @@ def _render(entry: MediaItem, root: str) -> QImage | None:
         return image
     if entry.entry_type == MediaType.VIDEO:
         path = volumes.absolute_path(entry.video_link, root)
-        image = OSHelper.get_video_frame_image(path)
+        image = media_preview.get_video_frame_image(path)
         if image is None:
-            os_thumb = OSHelper.get_os_thumbnail(path)
+            os_thumb = media_preview.get_os_thumbnail(path)
             if os_thumb:
                 image = QImage(os_thumb)
         return None if image is None or image.isNull() else image

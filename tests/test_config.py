@@ -11,11 +11,11 @@ from mediavault.config import (
     LibraryRoot,
     VaultConfig,
     create_config,
-    find_new_media,
     load_configs,
     locate,
     save_configs,
 )
+from mediavault.scanner import find_new_media
 
 
 def _touch(path):
