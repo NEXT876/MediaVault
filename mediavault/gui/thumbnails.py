@@ -45,7 +45,9 @@ def cache_path(entry: MediaItem, scope: str = "") -> str:
 
 
 def _scaled(image: QImage) -> QImage:
-    """Shrink an image to the cache bounds."""
+    """Shrink an image to the cache bounds; smaller images stay as they are."""
+    if image.width() <= _MAX_EDGE and image.height() <= _MAX_EDGE:
+        return image
     return image.scaled(
         _MAX_EDGE,
         _MAX_EDGE,

@@ -89,10 +89,8 @@ class _Index:
         self.paths: set[str] = set()
         self.hashes: set[str] = set()
         self.keys: set[tuple[str, str, str, str]] = set()
-        self.titles: set[str] = set()
         self.dirty = False
         for entry in db.get_by_type(type_str):
-            self.titles.add(entry.title)
             if entry.media_path:
                 self.paths.add(volumes.path_key(entry.media_path))
             if not entry.content_hash and entry.media_path:
@@ -125,7 +123,6 @@ class _Index:
 
     def add(self, entry: MediaItem) -> None:
         """Register a freshly added entry in all lookup sets."""
-        self.titles.add(entry.title)
         self.paths.add(volumes.path_key(entry.media_path))
         self._remember(entry)
 
@@ -190,9 +187,10 @@ def _import_paths(
     index = _Index(db, type_str, root)
     new_entries: list[MediaItem] = []
     for path in paths:
-        title = os.path.splitext(os.path.basename(path))[0]
+        # Same file name in another folder is fine; path, content hash and AI
+        # generation key decide what counts as a duplicate.
         path_key = volumes.path_key(path, root)
-        if path_key in index.paths or title in index.titles:
+        if path_key in index.paths:
             result.duplicates += 1
             continue
         entry = build_entry(path, type_str, group, mode, root)

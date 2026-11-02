@@ -1,3 +1,6 @@
+import struct
+import zlib
+
 from mediavault.config import MODE_AI, MODE_NORMAL
 from mediavault.importer import content_hash, find_duplicate, import_paths
 from mediavault.models import MediaDatabase, MediaItem
@@ -61,8 +64,11 @@ def test_import_skips_same_path_twice(tmp_path):
     path = tmp_path / "cat.png"
     path.write_bytes(b"cat")
 
-    import_paths(db, [str(path), str(path)], type_str="Bilder", group="", mode="normal")
+    result = import_paths(
+        db, [str(path), str(path)], type_str="Bilder", group="", mode=MODE_NORMAL
+    )
 
+    assert (result.added, result.duplicates) == (1, 1)
     assert len(db.entries) == 1
 
 
@@ -82,7 +88,7 @@ def test_import_backfills_legacy_content_hash(tmp_path):
     db = _db(tmp_path)
     legacy_path = tmp_path / "legacy.png"
     legacy_path.write_bytes(b"legacy")
-    legacy = MediaItem("legacy", str(legacy_path), 50, "", "Bilder", "")
+    legacy = MediaItem("legacy", image_path=str(legacy_path), entry_type="Bilder")
     db.add_many([legacy])
     assert legacy.content_hash == ""
 
@@ -106,6 +112,87 @@ def test_find_duplicate_detects_stored_content(tmp_path):
     renamed.write_bytes(b"cat")
 
     assert find_duplicate(db, str(renamed), "Bilder", {})
+
+
+def test_find_duplicate_rejects_unknown_content(tmp_path):
+    db = _db(tmp_path)
+    path = tmp_path / "cat.png"
+    path.write_bytes(b"cat")
+    import_paths(db, [str(path)], type_str="Bilder", group="", mode=MODE_NORMAL)
+
+    other = tmp_path / "dog.png"
+    other.write_bytes(b"dog")
+
+    assert not find_duplicate(db, str(other), "Bilder", {})
+
+
+def _ai_png(path, prompt="castle", seed=42, extra=b""):
+    """Write a PNG carrying A1111 parameters; ``extra`` changes the bytes."""
+    text = f"{prompt}\nSteps: 20, Seed: {seed}, Model: m".encode()
+    chunk = b"tEXt", b"parameters\x00" + text
+    data = chunk[0] + chunk[1]
+    body = struct.pack(">I", len(chunk[1])) + data + struct.pack(">I", zlib.crc32(data))
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    ihdr_data = b"IHDR" + ihdr
+    iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND"))
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", len(ihdr))
+        + ihdr_data
+        + struct.pack(">I", zlib.crc32(ihdr_data))
+        + body
+        + iend
+        + extra
+    )
+    return str(path)
+
+
+def test_import_ai_mode_adds_file_with_metadata(tmp_path):
+    db = _db(tmp_path)
+    path = _ai_png(tmp_path / "castle.png")
+
+    result = import_paths(db, [path], type_str="Bilder", group="", mode=MODE_AI)
+
+    assert (result.added, result.skipped_no_ai) == (1, 0)
+    assert db.entries[0].ai_meta["prompt"] == "castle"
+    assert db.entries[0].ai_meta["seed"] == 42
+
+
+def test_import_ai_mode_skips_same_generation_with_other_bytes(tmp_path):
+    db = _db(tmp_path)
+    first = _ai_png(tmp_path / "a.png")
+    # Same prompt and seed, re-saved with different bytes and name.
+    second = _ai_png(tmp_path / "b.png", extra=b"trailing")
+    other_seed = _ai_png(tmp_path / "c.png", seed=43)
+
+    result = import_paths(
+        db, [first, second, other_seed], type_str="Bilder", group="", mode=MODE_AI
+    )
+
+    assert (result.added, result.duplicates) == (2, 1)
+    assert {entry.title for entry in db.entries} == {"a", "c"}
+
+
+def test_same_file_name_in_different_folders_is_not_a_duplicate(tmp_path):
+    root = tmp_path / "stick"
+    first = _write_media(root / "Urlaub" / "IMG_0001.jpg", b"beach")
+    second = _write_media(root / "Geburtstag" / "IMG_0001.jpg", b"cake")
+    db = _db(tmp_path)
+
+    result = import_paths(
+        db,
+        [first, second],
+        type_str="Bilder",
+        group="",
+        mode=MODE_NORMAL,
+        root=str(root),
+    )
+
+    assert result.added == 2
+    assert sorted(entry.image_path for entry in db.entries) == [
+        "Geburtstag/IMG_0001.jpg",
+        "Urlaub/IMG_0001.jpg",
+    ]
 
 
 def _write_media(path, payload=b"x"):

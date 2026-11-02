@@ -3,11 +3,21 @@
 import os
 from pathlib import Path
 
-from PyQt6.QtGui import QImage
+import pytest
+
+QtGui = pytest.importorskip("PyQt6.QtGui", exc_type=ImportError)
+QImage = QtGui.QImage
 
 from mediavault.gui import thumbnails
 from mediavault.gui.thumbnails import load_thumbnail
+from mediavault.importer import content_hash
 from mediavault.models import MediaItem
+
+
+@pytest.fixture(autouse=True)
+def isolated_thumb_cache(tmp_path, monkeypatch):
+    """Keep the preview cache out of the developer's home directory."""
+    monkeypatch.setattr(thumbnails, "CACHE_DIR", str(tmp_path / "thumbs"))
 
 
 def _write_image(path: Path, width: int, height: int) -> str:
@@ -23,7 +33,8 @@ def test_load_thumbnail_scales_to_cache_bounds(tmp_path):
 
     image = load_thumbnail(entry)
 
-    assert (image.width(), image.height()) == (512, 256)
+    edge = thumbnails._MAX_EDGE
+    assert (image.width(), image.height()) == (edge, edge // 2)
 
 
 def test_load_thumbnail_returns_none_for_missing_file(tmp_path):
@@ -67,7 +78,6 @@ def test_missing_source_leaves_no_cache_file(tmp_path):
     entry = MediaItem(title="gone", image_path=str(tmp_path / "nope.png"))
 
     assert load_thumbnail(entry) is None
-    assert thumbnails.cache_path(entry)
     assert not os.path.exists(thumbnails.cache_path(entry))
 
 
@@ -79,3 +89,18 @@ def test_cache_key_is_scoped_per_volume_without_hash():
     )
     hashed = MediaItem(title="a", image_path="x.png", content_hash="abc")
     assert thumbnails.cache_key(hashed, "s1") == thumbnails.cache_key(hashed, "s2")
+
+
+def test_changed_content_gets_a_fresh_preview(tmp_path):
+    source = tmp_path / "a.png"
+    _write_image(source, 40, 20)
+    entry = MediaItem(
+        title="a", image_path=str(source), content_hash=content_hash(str(source))
+    )
+    load_thumbnail(entry)
+
+    _write_image(source, 20, 40)
+    entry.content_hash = content_hash(str(source))
+    image = load_thumbnail(entry)
+
+    assert (image.width(), image.height()) == (20, 40)
