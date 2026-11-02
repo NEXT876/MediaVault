@@ -43,8 +43,11 @@ class StickDialog(QDialog):
         self.configs = list(configs)
         self.config = config
         self.target_db_path = ""
+        # Volume root whose existing absolute entries should become relative.
+        self.migrate_root = ""
         self._roots: list[str] = []
         self._folder = ""
+        self._mount = ""
         self._volume_uuid = ""
         self._volume_label = ""
         self._folder_rel = ""
@@ -190,8 +193,11 @@ class StickDialog(QDialog):
                 actual_root, label=os.path.basename(actual_root.rstrip("\\/")) or actual_root
             )
             self._fill_volumes()
+            if actual_root in self._roots:
+                self.list_volumes.setCurrentRow(self._roots.index(actual_root))
 
         self._folder = folder
+        self._mount = actual_root
         self._volume_uuid = info.uuid
         self._volume_label = info.label or actual_root
         self._folder_rel = volumes.relative_to_root(folder, actual_root)
@@ -211,6 +217,7 @@ class StickDialog(QDialog):
         self.config.folder = ""
         save_configs(self.configs, self.config.db_path)
         self.target_db_path = self.config.db_path
+        self.migrate_root = self._mount
         self.accept()
 
     def _create_new(self) -> None:

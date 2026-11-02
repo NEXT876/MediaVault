@@ -7,7 +7,7 @@ future API downloader.
 import hashlib
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +50,7 @@ class ImportResult:
     added: int = 0
     duplicates: int = 0
     skipped_no_ai: int = 0
+    failed: int = 0
 
 
 def build_entry(
@@ -152,8 +153,14 @@ def import_paths(
     group: str,
     mode: str,
     root: str = "",
+    transfer: Callable[[str], str | None] | None = None,
 ) -> ImportResult:
-    """Import files as entries, skipping duplicates and files without AI metadata."""
+    """Import files as entries, skipping duplicates and files without AI metadata.
+
+    transfer, if given, copies an accepted file into the library and returns
+    its new path (None on failure). It only runs once the file passed every
+    check, so rejected files never leave stray copies behind.
+    """
     result = ImportResult()
     index = _Index(db, type_str, root)
     new_entries: list[MediaItem] = []
@@ -170,6 +177,12 @@ def import_paths(
         if index.is_known(path_key, entry.ai_meta, entry.content_hash):
             result.duplicates += 1
             continue
+        if transfer is not None:
+            stored = transfer(path)
+            if stored is None:
+                result.failed += 1
+                continue
+            entry.set_file(volumes.stored_path(stored, root))
         index.add(entry)
         new_entries.append(entry)
     if new_entries:

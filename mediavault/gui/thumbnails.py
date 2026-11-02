@@ -25,14 +25,20 @@ CACHE_DIR = os.path.join(os.path.expanduser("~"), ".mediavault", "thumbs")
 _MAX_EDGE = 512
 
 
-def cache_key(entry: MediaItem) -> str:
-    """Return the identity an entry preview is cached under."""
-    return entry.content_hash or entry.media_path
+def cache_key(entry: MediaItem, scope: str = "") -> str:
+    """Return the identity an entry preview is cached under.
+
+    Without a content hash the stored path is only unique inside one volume,
+    so the volume scope is part of the key.
+    """
+    if entry.content_hash:
+        return entry.content_hash
+    return f"{scope}|{entry.media_path}" if entry.media_path else ""
 
 
-def cache_path(entry: MediaItem) -> str:
+def cache_path(entry: MediaItem, scope: str = "") -> str:
     """Return the cache file for an entry, or an empty string if uncacheable."""
-    key = cache_key(entry)
+    key = cache_key(entry, scope)
     if not key:
         return ""
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()
@@ -49,18 +55,18 @@ def _scaled(image: QImage) -> QImage:
     )
 
 
-def _read_cache(entry: MediaItem) -> QImage | None:
+def _read_cache(entry: MediaItem, scope: str = "") -> QImage | None:
     """Return the cached preview for an entry, if one exists."""
-    path = cache_path(entry)
+    path = cache_path(entry, scope)
     if not path or not os.path.isfile(path):
         return None
     image = QImage(path)
     return None if image.isNull() else image
 
 
-def _write_cache(entry: MediaItem, image: QImage) -> None:
+def _write_cache(entry: MediaItem, image: QImage, scope: str = "") -> None:
     """Store a preview in the cache; failures only cost a reload."""
-    path = cache_path(entry)
+    path = cache_path(entry, scope)
     if not path:
         return
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -94,21 +100,23 @@ def _render(entry: MediaItem, root: str) -> QImage | None:
     return None
 
 
-def load_thumbnail(entry: MediaItem, root: str = "") -> QImage | None:
+def load_thumbnail(
+    entry: MediaItem, root: str = "", scope: str = ""
+) -> QImage | None:
     """Load one preview, using and filling the on-disk cache."""
-    cached = _read_cache(entry)
+    cached = _read_cache(entry, scope)
     if cached is not None:
         return cached
     image = _render(entry, root)
     if image is None:
         return None
     preview = _scaled(image)
-    _write_cache(entry, preview)
+    _write_cache(entry, preview, scope)
     return preview
 
 
 def load_thumbnails(
-    entries: list[MediaItem], root: str = ""
+    entries: list[MediaItem], root: str = "", scope: str = ""
 ) -> dict[str, QImage | None]:
     """Load previews for several entries, keyed by media path.
 
@@ -117,7 +125,7 @@ def load_thumbnails(
     previews: dict[str, QImage | None] = {}
     for entry in entries:
         try:
-            previews[entry.media_path] = load_thumbnail(entry, root)
+            previews[entry.media_path] = load_thumbnail(entry, root, scope)
         except Exception:  # One bad file must not stop the batch.
             logger.debug(
                 "Vorschau fehlgeschlagen: %s", entry.media_path, exc_info=True

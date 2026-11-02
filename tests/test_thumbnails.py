@@ -38,10 +38,10 @@ def test_load_thumbnails_keeps_other_previews_when_one_fails(tmp_path, monkeypat
     )
     bad = MediaItem(title="bad", image_path="broken")
 
-    def fake_load(entry, root=""):
+    def fake_load(entry, root="", scope=""):
         if entry is bad:
             raise OSError("broken file")
-        return load_thumbnail(entry, root)
+        return load_thumbnail(entry, root, scope)
 
     monkeypatch.setattr(thumbnails, "load_thumbnail", fake_load)
 
@@ -69,3 +69,13 @@ def test_missing_source_leaves_no_cache_file(tmp_path):
     assert load_thumbnail(entry) is None
     assert thumbnails.cache_path(entry)
     assert not os.path.exists(thumbnails.cache_path(entry))
+
+
+def test_cache_key_is_scoped_per_volume_without_hash():
+    entry = MediaItem(title="a", image_path="same/rel.png")
+
+    assert thumbnails.cache_key(entry, "stick-1") != thumbnails.cache_key(
+        entry, "stick-2"
+    )
+    hashed = MediaItem(title="a", image_path="x.png", content_hash="abc")
+    assert thumbnails.cache_key(hashed, "s1") == thumbnails.cache_key(hashed, "s2")

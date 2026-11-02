@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mediavault import volumes
+from mediavault import transfer, volumes
 from mediavault.ai_meta import extract_ai_metadata
 from mediavault.config import (
     IMAGE_EXTS,
@@ -73,7 +73,7 @@ from mediavault.gui.worker import Worker
 from mediavault.importer import find_duplicate, import_paths, norm_path
 from mediavault.models import MediaDatabase, MediaItem
 from mediavault.rule34 import Post, collect_new_posts_multi, fetch_preview
-from mediavault.transfer import CopyResult, copy_into_folder
+from mediavault.transfer import copy_into_folder
 from mediavault.utils import OSHelper
 
 logger = logging.getLogger(__name__)
@@ -541,13 +541,28 @@ class MainWindow(QMainWindow):
         path = entry.resolve(root)
         return bool(path) and os.path.isfile(path)
 
-    def _copy_into_library(self, paths: list[str]) -> CopyResult:
-        """Copy new files into the config folder, skipping known content."""
+    def _library_ready(self) -> bool:
+        """Return False and warn when the config's stick is not connected."""
+        if self.config.volume_uuid and not locate(self.config).available:
+            QMessageBox.warning(
+                self,
+                "Mediathek nicht verbunden",
+                "Der Stick mit dieser Mediathek ist nicht verbunden.",
+            )
+            return False
+        return True
+
+    def _copy_into_library(self, path: str) -> str | None:
+        """Copy one accepted file into the config folder; None on failure.
+
+        Configs without a managed folder keep files where they are.
+        """
         target = locate(self.config).folder
         if not target:
-            return CopyResult(copied=list(paths))
+            return path
         known = {entry.content_hash for entry in self.db.entries if entry.content_hash}
-        return copy_into_folder(paths, target, known)
+        result = copy_into_folder([path], target, known)
+        return result.copied[0] if result.copied else None
 
     def scan_folder(self) -> None:
         """Index the config folder into the DB, which acts as the reference cache.
@@ -595,6 +610,10 @@ class MainWindow(QMainWindow):
         self.db.save()
         dlg = StickDialog(self, self.configs, self.config)
         if dlg.exec() and dlg.target_db_path:
+            if dlg.migrate_root:
+                database = self._databases.get(dlg.target_db_path)
+                if database is not None:
+                    database.relativize(dlg.migrate_root)
             self._activate_config(dlg.target_db_path)
 
     def _activate_config(self, db_path: str) -> None:
@@ -627,7 +646,8 @@ class MainWindow(QMainWindow):
     def _check_volumes(self) -> None:
         """Keep location, window title, sidebar and stick banner in sync."""
         location = locate(self.config)
-        changed = self._location is not None and location.volume != self._location.volume
+        previous = self._location
+        changed = previous is not None and location.volume != previous.volume
         self._location = location
         self._sync_window_title(location)
         self.lbl_stick.setText(
@@ -641,6 +661,12 @@ class MainWindow(QMainWindow):
             [(root, info) for root, info in volumes.vaults() if info.uuid not in used]
         )
         if changed:
+            # Previews missed while unplugged must be retried, and files added
+            # on another machine picked up.
+            for key in [k for k, v in self.thumbnail_cache.items() if v is None]:
+                del self.thumbnail_cache[key]
+            if location.available:
+                self.auto_scan_folder()
             self.refresh_data()
 
     def _sync_window_title(self, location: LibraryRoot) -> None:
@@ -918,7 +944,9 @@ class MainWindow(QMainWindow):
         """
         key = entry.media_path
         if key not in self.thumbnail_cache:
-            image = load_thumbnail(entry, locate(self.config).volume)
+            image = load_thumbnail(
+                entry, locate(self.config).volume, self.config.volume_uuid
+            )
             self.thumbnail_cache[key] = QPixmap.fromImage(image) if image else None
         return self.thumbnail_cache[key]
 
@@ -934,7 +962,11 @@ class MainWindow(QMainWindow):
         if not missing:
             return
         worker = Worker(
-            self, load_thumbnails, entries=missing, root=locate(self.config).volume
+            self,
+            load_thumbnails,
+            entries=missing,
+            root=locate(self.config).volume,
+            scope=self.config.volume_uuid,
         )
         worker.finished.connect(self._finish_thumbnail_load)
         self._thumb_worker = worker
@@ -1390,22 +1422,8 @@ class MainWindow(QMainWindow):
         path, _ = OSHelper.pick_file(self, "Datei auswählen", file_filter)
         if not path:
             return
-        result = self._copy_into_library([path])
-        if result.skipped:
-            QMessageBox.information(
-                self,
-                "Bereits vorhanden",
-                "Dieses Medium liegt bereits im Ordner der Mediathek.",
-            )
+        if not self._library_ready():
             return
-        if not result.copied:
-            QMessageBox.warning(
-                self,
-                "Kopieren fehlgeschlagen",
-                "Die Datei konnte nicht in den Ordner der Mediathek kopiert werden.",
-            )
-            return
-        path = result.copied[0]
 
         meta: dict[str, Any] = {}
         if self.config.mode == MODE_AI:
@@ -1418,15 +1436,26 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-        if find_duplicate(
-            self.db, path, type_str, meta, root=locate(self.config).volume
-        ):
+        root = locate(self.config).volume
+        if find_duplicate(self.db, path, type_str, meta, root=root):
             QMessageBox.information(
                 self,
                 "Bereits vorhanden",
                 "Dieses Medium ist bereits in der Sammlung.",
             )
             return
+
+        # Only copy once every check passed; undo the copy if the user backs out.
+        stored = self._copy_into_library(path)
+        if stored is None:
+            QMessageBox.warning(
+                self,
+                "Kopieren fehlgeschlagen",
+                "Die Datei konnte nicht in den Ordner der Mediathek kopiert werden.",
+            )
+            return
+        created = stored != path and not transfer.is_inside(path, locate(self.config).folder)
+        path = stored
 
         dlg = EditDialog(
             self,
@@ -1442,6 +1471,11 @@ class MainWindow(QMainWindow):
 
         if dlg.exec():
             self.refresh_data()
+        elif created:
+            try:
+                os.remove(path)
+            except OSError:
+                logger.warning("Kopie nicht entfernbar: %s", path, exc_info=True)
 
     def _batch_import(self, type_str: str) -> None:
         """Import several files as entries, skipping duplicates."""
@@ -1461,23 +1495,23 @@ class MainWindow(QMainWindow):
             if self.combo_group.currentText() != ALL_GROUPS
             else ""
         )
-        copied = self._copy_into_library(paths)
+        if not self._library_ready():
+            return
         result = import_paths(
             self.db,
-            copied.copied,
+            paths,
             type_str=type_str,
             group=group,
             mode=self.config.mode,
             root=locate(self.config).volume,
+            transfer=self._copy_into_library,
         )
         if result.added:
             self.refresh_data()
-        if result.duplicates or result.skipped_no_ai or copied.skipped or copied.failed:
+        if result.duplicates or result.skipped_no_ai or result.failed:
             summary = [f"{result.added} importiert", f"{result.duplicates} Duplikate"]
-            if copied.skipped:
-                summary.append(f"{copied.skipped} schon im Ordner")
-            if copied.failed:
-                summary.append(f"{len(copied.failed)} nicht kopierbar")
+            if result.failed:
+                summary.append(f"{result.failed} nicht kopierbar")
             if result.skipped_no_ai:
                 summary.append(f"{result.skipped_no_ai} ohne KI-Metadaten")
             QMessageBox.information(
@@ -1546,14 +1580,9 @@ class MainWindow(QMainWindow):
 
     def _do_random(self, smart: bool, global_pool: bool) -> None:
         """Pick a random entry (local or global) and open it."""
-        location = locate(self.config)
-        if self.config.volume_uuid and not location.available:
-            QMessageBox.warning(
-                self,
-                "Mediathek nicht verbunden",
-                "Der Stick mit dieser Mediathek ist nicht verbunden.",
-            )
+        if not self._library_ready():
             return
+        location = locate(self.config)
         pool = (
             self.db.entries if global_pool else self.db.get_by_type(self.current_view)
         )

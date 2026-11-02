@@ -113,3 +113,22 @@ def test_path_key_matches_absolute_and_relative(tmp_path):
     assert volumes.path_key("", root) == ""
     # Without a root an absolute path stays absolute, so nothing matches falsely.
     assert volumes.path_key(absolute) != volumes.path_key("a/b.png", root)
+
+
+def test_relativize_converts_only_entries_inside_root(tmp_path):
+    from mediavault.models import MediaDatabase, MediaItem
+
+    root = tmp_path / "stick"
+    (root / "m").mkdir(parents=True)
+    db = MediaDatabase(str(tmp_path / "db.json"))
+    db.entries = [
+        MediaItem(title="in", image_path=str(root / "m" / "a.png")),
+        MediaItem(title="out", image_path=str(tmp_path / "b.png")),
+        MediaItem(title="vid", entry_type="Videos", video_link=str(root / "v.mp4")),
+    ]
+
+    assert db.relativize(str(root)) == 2
+    assert db.entries[0].image_path == "m/a.png"
+    assert db.entries[1].image_path == str(tmp_path / "b.png")
+    assert db.entries[2].video_link == "v.mp4"
+    assert db.relativize(str(root)) == 0

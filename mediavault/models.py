@@ -107,6 +107,19 @@ class MediaDatabase:
                 except OSError:
                     pass
 
+    def relativize(self, root: str) -> int:
+        """Store paths inside a volume root relative to it; return changed entries."""
+        changed = 0
+        for entry in self.entries:
+            image = volumes.stored_path(entry.image_path, root)
+            video = volumes.stored_path(entry.video_link, root)
+            if (image, video) != (entry.image_path, entry.video_link):
+                entry.image_path, entry.video_link = image, video
+                changed += 1
+        if changed:
+            self.save()
+        return changed
+
     def save(self) -> None:
         """Write all entries atomically to the JSON file."""
         with self._lock:

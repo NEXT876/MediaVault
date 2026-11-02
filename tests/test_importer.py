@@ -162,3 +162,72 @@ def test_entry_resolves_back_to_the_original_file(tmp_path):
     )
 
     assert db.entries[0].resolve(str(root)) == image
+
+
+def test_transfer_runs_only_for_accepted_files(tmp_path):
+    db = _db(tmp_path)
+    kept = tmp_path / "kept.png"
+    kept.write_bytes(b"one")
+    twin = tmp_path / "twin.png"
+    twin.write_bytes(b"one")
+    seen = []
+
+    def transfer(path):
+        seen.append(path)
+        return path
+
+    result = import_paths(
+        db,
+        [str(kept), str(twin)],
+        type_str="Bilder",
+        group="",
+        mode=MODE_NORMAL,
+        transfer=transfer,
+    )
+
+    assert result.added == 1 and result.duplicates == 1
+    assert seen == [str(kept)]
+
+
+def test_transfer_skipped_for_files_without_ai_meta(tmp_path):
+    db = _db(tmp_path)
+    plain = tmp_path / "plain.png"
+    plain.write_bytes(b"x")
+    seen = []
+
+    result = import_paths(
+        db,
+        [str(plain)],
+        type_str="Bilder",
+        group="",
+        mode=MODE_AI,
+        transfer=lambda path: seen.append(path) or path,
+    )
+
+    assert result.skipped_no_ai == 1 and not seen
+
+
+def test_transfer_failure_is_counted_and_stores_new_path(tmp_path):
+    db = _db(tmp_path)
+    root = tmp_path / "stick"
+    root.mkdir()
+    ok = tmp_path / "ok.png"
+    ok.write_bytes(b"ok")
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"bad")
+
+    def transfer(path):
+        return str(root / "ok.png") if path == str(ok) else None
+
+    result = import_paths(
+        db,
+        [str(ok), str(bad)],
+        type_str="Bilder",
+        group="",
+        mode=MODE_NORMAL,
+        root=str(root),
+        transfer=transfer,
+    )
+
+    assert result.added == 1 and result.failed == 1
+    assert db.entries[0].image_path == "ok.png"
