@@ -187,14 +187,14 @@ def _parse_comfyui(data: dict[str, Any]) -> dict[str, Any]:
 
     if not positive:
         # Heuristic: without a resolvable sampler link, treat every text node as prompt.
-        texts = []
-        for node in nodes:
-            if node.get("class_type") != "CLIPTextEncode":
-                continue
-            text = node.get("inputs", {}).get("text", "")
-            if isinstance(text, str) and text.strip():
-                texts.append(text.strip())
-        positive = ", ".join(texts)
+        texts = (
+            node.get("inputs", {}).get("text", "")
+            for node in nodes
+            if node.get("class_type") == "CLIPTextEncode"
+        )
+        positive = ", ".join(
+            text.strip() for text in texts if isinstance(text, str) and text.strip()
+        )
 
     meta["prompt"] = positive
     meta["negative_prompt"] = negative
@@ -298,33 +298,15 @@ def summarize_prompts(entries: Iterable[MediaItem]) -> dict[str, Any]:
     ai_entries = [
         entry for entry in entries if (entry.ai_meta.get("prompt") or "").strip()
     ]
-    if not ai_entries:
-        return {
-            "count": 0,
-            "average_score": 0.0,
-            "average_prompt_length": 0.0,
-            "top_tags": [],
-            "models": [],
-            "samplers": [],
-            "top_tags_by_score": [],
-            "top_prompts": [],
-        }
-
+    count = len(ai_entries) or 1  # avoids dividing by zero for an empty list
     tag_counts: Counter[str] = Counter()
     tag_scores: dict[str, list[int]] = {}
-    models: Counter[str] = Counter()
-    samplers: Counter[str] = Counter()
     for entry in ai_entries:
-        prompt = entry.ai_meta["prompt"]
-        for tag in _prompt_tags(prompt):
+        for tag in _prompt_tags(entry.ai_meta["prompt"]):
             tag_counts[tag] += 1
             tag_scores.setdefault(tag, []).append(entry.score)
-        model = entry.ai_meta.get("model")
-        sampler = entry.ai_meta.get("sampler")
-        if model:
-            models[model] += 1
-        if sampler:
-            samplers[sampler] += 1
+    models = Counter(m for e in ai_entries if (m := e.ai_meta.get("model")))
+    samplers = Counter(s for e in ai_entries if (s := e.ai_meta.get("sampler")))
 
     scored_tags = [
         (tag, len(scores), sum(scores) / len(scores))
@@ -336,11 +318,11 @@ def summarize_prompts(entries: Iterable[MediaItem]) -> dict[str, Any]:
     top_prompts = sorted(ai_entries, key=lambda entry: -entry.score)[:10]
     return {
         "count": len(ai_entries),
-        "average_score": sum(entry.score for entry in ai_entries) / len(ai_entries),
+        "average_score": sum(entry.score for entry in ai_entries) / count,
         "average_prompt_length": sum(
             len(entry.ai_meta["prompt"]) for entry in ai_entries
         )
-        / len(ai_entries),
+        / count,
         "top_tags": tag_counts.most_common(10),
         "models": models.most_common(10),
         "samplers": samplers.most_common(10),

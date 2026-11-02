@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from mediavault.importer import content_hash
+from mediavault.volumes import is_inside
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +22,6 @@ class CopyResult:
     copied: list[str] = field(default_factory=list)
     skipped: int = 0
     failed: list[str] = field(default_factory=list)
-
-
-def is_inside(path: str, folder: str) -> bool:
-    """Return True if path already lives inside folder."""
-    if not path or not folder:
-        return False
-    target = os.path.normcase(os.path.abspath(path))
-    base = os.path.normcase(os.path.abspath(folder))
-    return target == base or target.startswith(base.rstrip(os.sep) + os.sep)
 
 
 def unique_destination(folder: str, name: str) -> str:

@@ -6,11 +6,11 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from mediavault.config import APP_DIR
+
 logger = logging.getLogger(__name__)
 
-WHEEL_CONFIGS_PATH = os.path.join(
-    os.path.expanduser("~"), ".mediavault", "wheel_configs.json"
-)
+WHEEL_CONFIGS_PATH = os.path.join(APP_DIR, "wheel_configs.json")
 
 
 def _clean(data: Any) -> dict[str, list[str]]:
@@ -19,9 +19,8 @@ def _clean(data: Any) -> dict[str, list[str]]:
         return {}
     result: dict[str, list[str]] = {}
     for name, entries in data.items():
-        if not isinstance(name, str) or not name.strip():
-            continue
-        if not isinstance(entries, list):
+        valid = isinstance(name, str) and name.strip() and isinstance(entries, list)
+        if not valid:
             continue
         cleaned = [e.strip() for e in entries if isinstance(e, str) and e.strip()]
         if cleaned:
@@ -64,7 +63,4 @@ def save_wheel_configs(
 
 def matching_config(configs: Mapping[str, list[str]], entries: list[str]) -> str | None:
     """Return the name of a config with exactly these entries, if any."""
-    for name, saved in configs.items():
-        if saved == entries:
-            return name
-    return None
+    return next((name for name, saved in configs.items() if saved == entries), None)

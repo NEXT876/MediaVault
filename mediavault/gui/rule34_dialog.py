@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mediavault.config import VaultConfig, save_configs
-from mediavault.gui.widgets import field_label
+from mediavault.gui.widgets import button, field_label, hint_label
 from mediavault.gui.worker import Worker
 from mediavault.rule34 import Post, fetch_tag_suggestions, split_queries, tag_at
 
@@ -92,12 +92,8 @@ class Rule34Dialog(QDialog):
         saved_row = QHBoxLayout()
         self.combo_saved_tags = QComboBox()
         self.combo_saved_tags.activated.connect(self._load_saved_tags)
-        btn_save_tags = QPushButton("Tags speichern")
-        btn_save_tags.setProperty("variant", "ghost")
-        btn_save_tags.clicked.connect(self._save_saved_tags)
-        btn_delete_tags = QPushButton("Löschen")
-        btn_delete_tags.setProperty("variant", "ghost")
-        btn_delete_tags.clicked.connect(self._delete_saved_tags)
+        btn_save_tags = button("Tags speichern", "ghost", self._save_saved_tags)
+        btn_delete_tags = button("Löschen", "ghost", self._delete_saved_tags)
         saved_row.addWidget(self.combo_saved_tags, 1)
         saved_row.addWidget(btn_save_tags)
         saved_row.addWidget(btn_delete_tags)
@@ -126,25 +122,20 @@ class Rule34Dialog(QDialog):
         )
         layout.addWidget(self.chk_reset)
 
-        hint = QLabel(
+        hint = hint_label(
             "Key und User-ID stehen unter rule34.xxx → Account options → "
             "API Access Credentials; du kannst beide auch zusammen in das "
             "obere Feld einfügen. Beides wird im Klartext in configs.json "
             "gespeichert. Eine Suche pro Zeile; die Anzahl gilt pro Zeile. "
-            "Eigene sort:-Tags werden ignoriert; die neuesten IDs kommen zuerst."
+            "Eigene sort:-Tags werden ignoriert; die neuesten IDs kommen zuerst.",
+            "MutedLabel",
         )
-        hint.setObjectName("MutedLabel")
-        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_start = QPushButton("Importieren")
-        btn_start.setProperty("variant", "primary")
-        btn_start.clicked.connect(self._accept)
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_start = button("Importieren", "primary", self._accept)
         buttons.addWidget(btn_cancel)
         buttons.addWidget(btn_start)
         layout.addLayout(buttons)
@@ -361,12 +352,8 @@ class Rule34PreviewDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        btn_cancel = QPushButton("Abbrechen")
-        btn_cancel.setProperty("variant", "ghost")
-        btn_cancel.clicked.connect(self.reject)
-        btn_start = QPushButton("Auswahl importieren")
-        btn_start.setProperty("variant", "primary")
-        btn_start.clicked.connect(self.accept)
+        btn_cancel = button("Abbrechen", "ghost", self.reject)
+        btn_start = button("Auswahl importieren", "primary", self.accept)
         buttons.addWidget(btn_cancel)
         buttons.addWidget(btn_start)
         layout.addLayout(buttons)

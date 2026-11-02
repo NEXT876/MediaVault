@@ -21,11 +21,6 @@ logger = logging.getLogger(__name__)
 _CHUNK = 1024 * 1024
 
 
-def norm_path(path: str) -> str:
-    """Normalize a file path for duplicate checks."""
-    return os.path.normcase(os.path.abspath(path))
-
-
 def content_hash(path: str) -> str:
     """Return an identity hash for the bytes of a file.
 
@@ -41,6 +36,14 @@ def content_hash(path: str) -> str:
             f.seek(size - _CHUNK)
             digest.update(f.read(_CHUNK))
     return digest.hexdigest()
+
+
+def _try_hash(path: str) -> str:
+    """Return content_hash(path), or an empty string if the file is unreadable."""
+    try:
+        return content_hash(path)
+    except OSError:
+        return ""
 
 
 @dataclass
@@ -74,10 +77,7 @@ def build_entry(
         ai_meta=meta,
     )
     entry.set_file(volumes.stored_path(path, root))
-    try:
-        entry.content_hash = content_hash(path)
-    except OSError:
-        entry.content_hash = ""
+    entry.content_hash = _try_hash(path)
     return entry
 
 
@@ -95,13 +95,10 @@ class _Index:
                 self.paths.add(volumes.path_key(entry.media_path))
             if not entry.content_hash and entry.media_path:
                 # Backfill legacy entries once; missing files stay unhashed.
-                try:
-                    entry.content_hash = content_hash(
-                        volumes.absolute_path(entry.media_path, root)
-                    )
-                    self.dirty = True
-                except OSError:
-                    pass
+                entry.content_hash = _try_hash(
+                    volumes.absolute_path(entry.media_path, root)
+                )
+                self.dirty = self.dirty or bool(entry.content_hash)
             self._remember(entry)
 
     def _remember(self, entry: MediaItem) -> None:
@@ -132,22 +129,11 @@ def find_duplicate(
 ) -> bool:
     """Return True if the file or its AI generation is already stored."""
     with db.transaction():
-        return _find_duplicate(db, path, type_str, meta, root)
-
-
-def _find_duplicate(
-    db: MediaDatabase, path: str, type_str: str, meta: dict[str, Any], root: str
-) -> bool:
-    """Body of find_duplicate; the caller holds the database lock."""
-    index = _Index(db, type_str, root)
-    try:
-        file_hash = content_hash(path)
-    except OSError:
-        file_hash = ""
-    found = index.is_known(volumes.path_key(path, root), meta, file_hash)
-    if index.dirty:
-        db.save()
-    return found
+        index = _Index(db, type_str, root)
+        found = index.is_known(volumes.path_key(path, root), meta, _try_hash(path))
+        if index.dirty:
+            db.save()
+        return found
 
 
 def import_paths(
@@ -170,47 +156,34 @@ def import_paths(
     thread cannot slip past the duplicate check.
     """
     with db.transaction():
-        return _import_paths(db, paths, type_str, group, mode, root, transfer)
-
-
-def _import_paths(
-    db: MediaDatabase,
-    paths: Iterable[str],
-    type_str: str,
-    group: str,
-    mode: str,
-    root: str,
-    transfer: Callable[[str], str | None] | None,
-) -> ImportResult:
-    """Body of import_paths; the caller holds the database lock."""
-    result = ImportResult()
-    index = _Index(db, type_str, root)
-    new_entries: list[MediaItem] = []
-    for path in paths:
-        # Same file name in another folder is fine; path, content hash and AI
-        # generation key decide what counts as a duplicate.
-        path_key = volumes.path_key(path, root)
-        if path_key in index.paths:
-            result.duplicates += 1
-            continue
-        entry = build_entry(path, type_str, group, mode, root)
-        if entry is None:
-            result.skipped_no_ai += 1
-            continue
-        if index.is_known(path_key, entry.ai_meta, entry.content_hash):
-            result.duplicates += 1
-            continue
-        if transfer is not None:
-            stored = transfer(path)
-            if stored is None:
-                result.failed += 1
+        result = ImportResult()
+        index = _Index(db, type_str, root)
+        new_entries: list[MediaItem] = []
+        for path in paths:
+            # Same file name in another folder is fine; path, content hash and AI
+            # generation key decide what counts as a duplicate.
+            path_key = volumes.path_key(path, root)
+            if path_key in index.paths:
+                result.duplicates += 1
                 continue
-            entry.set_file(volumes.stored_path(stored, root))
-        index.add(entry)
-        new_entries.append(entry)
-    if new_entries:
-        db.add_many(new_entries)
-    elif index.dirty:
-        db.save()
-    result.added = len(new_entries)
-    return result
+            entry = build_entry(path, type_str, group, mode, root)
+            if entry is None:
+                result.skipped_no_ai += 1
+                continue
+            if index.is_known(path_key, entry.ai_meta, entry.content_hash):
+                result.duplicates += 1
+                continue
+            if transfer is not None:
+                stored = transfer(path)
+                if stored is None:
+                    result.failed += 1
+                    continue
+                entry.set_file(volumes.stored_path(stored, root))
+            index.add(entry)
+            new_entries.append(entry)
+        if new_entries:
+            db.add_many(new_entries)
+        elif index.dirty:
+            db.save()
+        result.added = len(new_entries)
+        return result

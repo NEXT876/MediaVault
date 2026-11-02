@@ -8,7 +8,7 @@ import shutil
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Any
@@ -139,12 +139,10 @@ class MediaDatabase:
                 logger.error("JSON beschädigt: %s", self.filepath)
                 self.load_error = "Datei beschädigt"
                 backup = f"{self.filepath}.corrupt.{int(time.time())}"
-                try:
+                with suppress(OSError):
                     shutil.copy(self.filepath, backup)
                     self.backup_path = backup
                     logger.info("Backup angelegt: %s", backup)
-                except OSError:
-                    pass
 
     def relativize(self, root: str) -> int:
         """Store paths inside a volume root relative to it; return changed entries."""

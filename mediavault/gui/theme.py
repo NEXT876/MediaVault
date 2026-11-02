@@ -347,30 +347,28 @@ def build_stylesheet(name: str) -> str:
 def build_qpalette(name: str) -> QPalette:
     """Return a QPalette for native dialogs and popups."""
     colors = PALETTES.get(name, PALETTES["dark"])
+    role = QPalette.ColorRole
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(colors["bg"]))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Base, QColor(colors["input_bg"]))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(colors["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.Text, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Button, QColor(colors["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(colors["primary"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(colors["primary_text"]))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(colors["surface"]))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(colors["text"]))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(colors["text_muted"]))
-    palette.setColor(QPalette.ColorRole.Link, QColor(colors["primary"]))
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.Text,
-        QColor(colors["text_muted"]),
-    )
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.ButtonText,
-        QColor(colors["text_muted"]),
-    )
+    for color_role, key in (
+        (role.Window, "bg"),
+        (role.WindowText, "text"),
+        (role.Base, "input_bg"),
+        (role.AlternateBase, "surface_alt"),
+        (role.Text, "text"),
+        (role.Button, "surface_alt"),
+        (role.ButtonText, "text"),
+        (role.Highlight, "primary"),
+        (role.HighlightedText, "primary_text"),
+        (role.ToolTipBase, "surface"),
+        (role.ToolTipText, "text"),
+        (role.PlaceholderText, "text_muted"),
+        (role.Link, "primary"),
+    ):
+        palette.setColor(color_role, QColor(colors[key]))
+    for color_role in (role.Text, role.ButtonText):
+        palette.setColor(
+            QPalette.ColorGroup.Disabled, color_role, QColor(colors["text_muted"])
+        )
     return palette
 
 

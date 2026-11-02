@@ -9,12 +9,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from mediavault.gui.widgets import button, hint_label
 from mediavault.gui.worker import Worker
 from mediavault.models import MediaDatabase
 from mediavault.rule34 import Post, download_and_import
@@ -96,9 +96,7 @@ class DownloadRow(QFrame):
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(6)
-        self.lbl_detail = QLabel()
-        self.lbl_detail.setObjectName("HintLabel")
-        self.lbl_detail.setWordWrap(True)
+        self.lbl_detail = hint_label()
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(2)
@@ -221,29 +219,23 @@ class DownloadsPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        hint = QLabel(
+        hint = hint_label(
             "Downloads laufen im Hintergrund weiter. Du kannst die Bibliothek "
             "benutzen und weitere Importe einreihen."
         )
-        hint.setObjectName("HintLabel")
-        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         header = QHBoxLayout()
         header.setSpacing(8)
         self.lbl_summary = QLabel()
         self.lbl_summary.setObjectName("SectionLabel")
-        self.btn_clear = QPushButton("Fertige entfernen")
-        self.btn_clear.setProperty("variant", "ghost")
-        self.btn_clear.clicked.connect(self.clear_finished)
+        self.btn_clear = button("Fertige entfernen", "ghost", self.clear_finished)
         header.addWidget(self.lbl_summary)
         header.addStretch(1)
         header.addWidget(self.btn_clear)
         layout.addLayout(header)
 
-        self.lbl_activity = QLabel()
-        self.lbl_activity.setObjectName("HintLabel")
-        self.lbl_activity.setWordWrap(True)
+        self.lbl_activity = hint_label()
         self.lbl_activity.hide()
         layout.addWidget(self.lbl_activity)
 

@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -45,6 +44,7 @@ from mediavault.gui.stick_banner import StickBanner
 from mediavault.gui.stick_dialog import StickDialog
 from mediavault.gui.theme import ThemeManager
 from mediavault.gui.wheel import WheelPage
+from mediavault.gui.widgets import button
 from mediavault.importer import find_duplicate, import_paths
 from mediavault.library import ALL_GROUPS, SORT_MODES
 from mediavault.models import MediaDatabase, MediaItem, MediaType
@@ -112,8 +112,8 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         self.sidebar = Sidebar()
-        self.sidebar.view_requested.connect(self.switch_view)
-        self.sidebar.downloads_requested.connect(self._show_downloads)
+        self.sidebar.view_requested.connect(self._show_page)
+        self.sidebar.downloads_requested.connect(lambda: self._show_page(DOWNLOADS))
         self.sidebar.random_requested.connect(self._do_random)
         self.sidebar.group_random_requested.connect(self._open_group_random)
         self.sidebar.stick_requested.connect(self._open_stick)
@@ -224,12 +224,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(8)
 
-        def button(text: str, variant: str, slot: Callable[[], None]) -> QPushButton:
-            btn = QPushButton(text)
-            btn.setProperty("variant", variant)
-            btn.clicked.connect(lambda _=False: slot())
-            return btn
-
         self.btn_sel_all = button("Alle", "ghost", lambda: self.grid.select_all())
         self.btn_sel_none = button(
             "Keine", "ghost", lambda: self.grid.clear_selection()
@@ -283,14 +277,6 @@ class MainWindow(QMainWindow):
             self.lbl_empty.hide()
             self._sync_loading()
 
-    def switch_view(self, view: MediaType) -> None:
-        """Switch between the image and video views and reload the grid."""
-        self._show_page(view)
-
-    def _show_downloads(self) -> None:
-        """Show the background download queue without leaving the library."""
-        self._show_page(DOWNLOADS)
-
     def _show_wheel(self) -> None:
         """Show the wheel of fortune page."""
         self._show_page(WHEEL)
@@ -303,12 +289,12 @@ class MainWindow(QMainWindow):
     def _reveal_downloads(self) -> None:
         """Switch to the queue page when a download still runs after a while."""
         if self._on_grid_page():
-            self._show_downloads()
+            self._show_page(DOWNLOADS)
 
     def _leave_empty_downloads(self) -> None:
         """Leave the download page once the last job is cleared."""
         if self.pages.currentWidget() is self.downloads_page:
-            self.switch_view(MediaType.IMAGE)
+            self._show_page(MediaType.IMAGE)
 
     def _sync_loading(self, *_args: object) -> None:
         """Show the preview spinner while the grid page loads previews."""

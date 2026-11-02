@@ -104,11 +104,8 @@ class RubberBandSelector(QObject):
     def _update_autoscroll(self, pos_in_viewport: QPoint) -> None:
         """Start or stop scrolling at the top or bottom edge."""
         viewport = self._scroll_area.viewport()
-        direction = 0
-        if pos_in_viewport.y() < self.AUTOSCROLL_MARGIN:
-            direction = -1
-        elif pos_in_viewport.y() > viewport.height() - self.AUTOSCROLL_MARGIN:
-            direction = 1
+        y, margin = pos_in_viewport.y(), self.AUTOSCROLL_MARGIN
+        direction = -1 if y < margin else 1 if y > viewport.height() - margin else 0
         self._direction = direction
         if direction and not self._timer.isActive():
             self._timer.start()

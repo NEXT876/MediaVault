@@ -16,11 +16,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage
 
 from mediavault import media_preview, volumes
+from mediavault.config import APP_DIR
 from mediavault.models import MediaItem, MediaType
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".mediavault", "thumbs")
+CACHE_DIR = os.path.join(APP_DIR, "thumbs")
 _MAX_EDGE = 512
 
 

@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from mediavault.gui.collapsible import CollapsibleSection
+from mediavault.gui.widgets import button, hint_label
 from mediavault.models import MediaType
 
 # Pages besides the library views; MediaType values name the library views.
@@ -22,22 +23,20 @@ def _section_label(text: str) -> QLabel:
 
 def _hint_label() -> QLabel:
     """Create a small wrapped status line under a button."""
-    label = QLabel("")
-    label.setObjectName("HintLabel")
-    label.setWordWrap(True)
+    label = hint_label()
     label.setContentsMargins(4, 0, 0, 0)
     return label
 
 
 def _nav_button(text: str, checkable: bool = False) -> QPushButton:
-    """Create a left-aligned navigation button."""
-    button = QPushButton(text)
-    button.setProperty("nav", True)
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    """Create a left-aligned navigation btn."""
+    btn = QPushButton(text)
+    btn.setProperty("nav", True)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
     if checkable:
-        button.setCheckable(True)
-        button.setAutoExclusive(True)
-    return button
+        btn.setCheckable(True)
+        btn.setAutoExclusive(True)
+    return btn
 
 
 class Sidebar(QWidget):
@@ -78,9 +77,9 @@ class Sidebar(QWidget):
             MediaType.IMAGE: _nav_button("🖼️  Bilder", checkable=True),
             MediaType.VIDEO: _nav_button("🎬  Videos", checkable=True),
         }
-        for view, button in self._view_buttons.items():
-            button.clicked.connect(lambda _=False, v=view: self.view_requested.emit(v))
-            layout.addWidget(button)
+        for view, btn in self._view_buttons.items():
+            btn.clicked.connect(lambda _=False, v=view: self.view_requested.emit(v))
+            layout.addWidget(btn)
 
         layout.addWidget(_section_label("SPEICHER"))
         btn_stick = self._add(layout, "🔌  Stick einrichten", self.stick_requested)
@@ -103,17 +102,11 @@ class Sidebar(QWidget):
         layout.addWidget(self._lbl_last_sync)
 
         layout.addWidget(_section_label("ZUFALL (LOKAL)"))
-        for text, smart, global_pool in (
-            ("🎲  Normal", False, False),
-            ("⚖️  Smart", True, False),
-        ):
-            self._add_random(layout, text, smart, global_pool)
+        self._add_random(layout, "🎲  Normal", smart=False, global_pool=False)
+        self._add_random(layout, "⚖️  Smart", smart=True, global_pool=False)
         layout.addWidget(_section_label("ZUFALL (GLOBAL)"))
-        for text, smart, global_pool in (
-            ("🌍  Alles", False, True),
-            ("⚖️🌍  Alles Smart", True, True),
-        ):
-            self._add_random(layout, text, smart, global_pool)
+        self._add_random(layout, "🌍  Alles", smart=False, global_pool=True)
+        self._add_random(layout, "⚖️🌍  Alles Smart", smart=True, global_pool=True)
         self._add(layout, "📂  Aus Gruppen", self.group_random_requested)
 
         # Collapsed by default; the open/closed state is remembered.
@@ -139,29 +132,28 @@ class Sidebar(QWidget):
         self._add(layout, "⚙️  Config wechseln", self.config_requested)
         self._btn_theme = self._add(layout, "", self.theme_requested)
 
-        btn_new = QPushButton("+  Neuer Eintrag")
-        btn_new.setProperty("variant", "primary")
+        btn_new = button(
+            "+  Neuer Eintrag", "primary", self.new_requested.emit, cursor=True
+        )
         btn_new.setFixedHeight(40)
-        btn_new.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_new.clicked.connect(self.new_requested)
         layout.addWidget(btn_new)
 
     def _add(self, layout: QVBoxLayout, text: str, signal: pyqtSignal) -> QPushButton:
-        """Add a navigation button that emits ``signal`` when clicked."""
-        button = _nav_button(text)
-        button.clicked.connect(lambda _=False: signal.emit())
-        layout.addWidget(button)
-        return button
+        """Add a navigation btn that emits ``signal`` when clicked."""
+        btn = _nav_button(text)
+        btn.clicked.connect(lambda _=False: signal.emit())
+        layout.addWidget(btn)
+        return btn
 
     def _add_random(
         self, layout: QVBoxLayout, text: str, smart: bool, global_pool: bool
     ) -> None:
-        """Add a button that asks for a random pick."""
-        button = _nav_button(text)
-        button.clicked.connect(
+        """Add a btn that asks for a random pick."""
+        btn = _nav_button(text)
+        btn.clicked.connect(
             lambda _=False: self.random_requested.emit(smart, global_pool)
         )
-        layout.addWidget(button)
+        layout.addWidget(btn)
 
     # --- State ---
     def set_mode(self, ai: bool, has_folder: bool) -> None:
@@ -175,8 +167,8 @@ class Sidebar(QWidget):
 
     def set_page(self, page: MediaType | str) -> None:
         """Check the button of a library view, DOWNLOADS or WHEEL."""
-        for media_type, button in self._view_buttons.items():
-            button.setChecked(media_type == page)
+        for media_type, btn in self._view_buttons.items():
+            btn.setChecked(media_type == page)
         self._btn_downloads.setChecked(page == DOWNLOADS)
         self._btn_wheel.setChecked(page == WHEEL)
 

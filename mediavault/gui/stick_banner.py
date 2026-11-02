@@ -1,8 +1,9 @@
 """Inline offer to set up a removable volume that no config uses yet."""
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QWidget
 
+from mediavault.gui.widgets import button, hint_label
 from mediavault.volumes import VolumeInfo
 
 
@@ -20,19 +21,17 @@ class StickBanner(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(10)
-        self._label = QLabel("")
-        self._label.setObjectName("HintLabel")
-        self._label.setWordWrap(True)
+        self._label = hint_label()
         row.addWidget(self._label, 1)
-        setup = QPushButton("Einrichten…")
-        setup.setProperty("variant", "primary")
-        setup.clicked.connect(self.setup_requested.emit)
+        setup = button("Einrichten…", "primary", self.setup_requested.emit)
         row.addWidget(setup)
-        close = QPushButton("×")
-        close.setProperty("variant", "ghost")
+        close = button(
+            "×",
+            "ghost",
+            self._dismiss,
+            tooltip="Diesen Stick in dieser Sitzung nicht mehr anbieten",
+        )
         close.setFixedWidth(34)
-        close.setToolTip("Diesen Stick in dieser Sitzung nicht mehr anbieten")
-        close.clicked.connect(self._dismiss)
         row.addWidget(close)
         self.hide()
 
