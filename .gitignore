@@ -221,6 +221,10 @@ __marimo__/
 .aider*
 
 #claude
-.claude/
+# Local Claude state stays out of git; shared config is tracked.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
 CLAUDE.md
 graphify-out/

@@ -51,6 +51,8 @@ class DownloadJob:
     posts: list[Post]
     selected_ids: set[int]
     newest_ids: dict[str, int]
+    # Volume root of a stick library; stored paths stay relative to it.
+    root: str = ""
     state: JobState = JobState.WAITING
     done: int = 0
     total: int = 0
@@ -177,6 +179,7 @@ class DownloadsPage(QWidget):
         posts: list[Post],
         selected_ids: set[int],
         newest_ids: dict[str, int],
+        root: str = "",
     ) -> None:
         """Append a job and start it unless another download is running."""
         self._sequence += 1
@@ -190,6 +193,7 @@ class DownloadsPage(QWidget):
                 posts=posts,
                 selected_ids=selected_ids,
                 newest_ids=newest_ids,
+                root=root,
             )
         )
         self._render()
@@ -307,6 +311,7 @@ class DownloadsPage(QWidget):
             folder=job.folder,
             tags=job.tags,
             selected_ids=job.selected_ids,
+            root=job.root,
             progress=self.progress.emit,
         )
         self._worker = worker

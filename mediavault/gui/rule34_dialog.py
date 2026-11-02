@@ -1,7 +1,6 @@
 """Dialogs for the rule34 import: settings, tag help and post preview."""
 
 import urllib.parse
-from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QTextCursor
@@ -293,15 +292,22 @@ class Rule34Dialog(QDialog):
             return
         self.accept()
 
-    def settings(self) -> dict[str, Any]:
-        """Return the entered settings as config field values."""
-        return {
-            "api_key": self.inp_key.text().strip(),
-            "user_id": self.inp_user.text().strip(),
-            "tags": "\n".join(split_queries(self.inp_tags.toPlainText())),
-            "count": self.spin_count.value(),
-            "webm": self.chk_webm.isChecked(),
-        }
+    def store_settings(self) -> None:
+        """Write the entered values into the config and persist all configs."""
+        settings = self.config.rule34
+        settings.api_key = self.inp_key.text().strip()
+        settings.user_id = self.inp_user.text().strip()
+        settings.tags = "\n".join(split_queries(self.inp_tags.toPlainText()))
+        settings.count = self.spin_count.value()
+        settings.webm = self.chk_webm.isChecked()
+        save_configs(self.configs, self.config.db_path)
+
+    def last_ids(self) -> dict[str, int]:
+        """Return the stored post IDs, or none when the user asked for a reset.
+
+        The import still skips files that are already stored locally.
+        """
+        return {} if self.chk_reset.isChecked() else self.config.rule34.last_ids
 
 
 class Rule34PreviewDialog(QDialog):

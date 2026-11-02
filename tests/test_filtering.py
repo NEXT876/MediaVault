@@ -1,4 +1,4 @@
-from mediavault.gui.main_window import ALL_GROUPS, visible_entries
+from mediavault.library import ALL_GROUPS, visible_entries
 from mediavault.models import MediaItem
 
 

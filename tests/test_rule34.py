@@ -504,3 +504,41 @@ def test_fetch_and_import_returns_empty_below_last_id(tmp_path, monkeypatch):
     assert result.imported == 0
     assert result.newest_id == 0
     assert db.entries == []
+
+
+def test_download_and_import_stores_stick_paths_relative(tmp_path):
+    stick = tmp_path / "stick"
+    db = MediaDatabase(str(tmp_path / "db.json"))
+
+    result = download_and_import(
+        db,
+        [Post(7, "https://x/seven.png")],
+        folder=str(stick / "media"),
+        tags="cat",
+        root=str(stick),
+        opener=_bytes_opener(b"png-bytes"),
+    )
+
+    assert result.imported == 1
+    assert db.entries[0].image_path == "media/rule34/rule34_7.png"
+
+
+def test_fetch_posts_with_previews_keeps_only_loaded_thumbnails(monkeypatch):
+    posts = [Post(2, "https://x/a.png"), Post(1, "https://x/b.png")]
+    posts[0].preview_url = "https://x/a_thumb.jpg"
+    monkeypatch.setattr(
+        rule34, "collect_new_posts_multi", lambda *args, **kwargs: (posts, {"cat": 2})
+    )
+    monkeypatch.setattr(
+        rule34,
+        "fetch_preview",
+        lambda url, **kwargs: b"thumb" if url.endswith("a_thumb.jpg") else None,
+    )
+
+    found, previews, newest = rule34.fetch_posts_with_previews(
+        "key", "1", "cat", False, 5, {}
+    )
+
+    assert found == posts
+    assert previews == {2: b"thumb"}
+    assert newest == {"cat": 2}

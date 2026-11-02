@@ -66,6 +66,23 @@ PALETTES: dict[str, dict[str, str]] = {
     },
 }
 
+# Slice colors of the wheel of fortune; vivid enough for both themes and
+# led by the dark theme's primary blue.
+WHEEL_SLICE_COLORS = (
+    "#4f8cff",  # Blau (primary)
+    "#ff6b6b",  # Koralle
+    "#ffd93d",  # Sonnengelb
+    "#2f9e6f",  # Grün
+    "#b983ff",  # Lavendel
+    "#ff9f45",  # Orange
+    "#25c4a8",  # Türkis
+    "#f76fb4",  # Pink
+    "#8ac6ff",  # Hellblau
+    "#c6e86b",  # Limette
+    "#7c6cf6",  # Violett
+    "#ffbf69",  # Apricot
+)
+
 _STYLESHEET = Template(
     """
 QMainWindow, QDialog {
@@ -85,6 +102,16 @@ QWidget#Sidebar {
 QLabel#AppTitle { font-size: 21px; font-weight: 700; }
 QLabel#AppSubtitle { color: $text_muted; font-size: 11px; }
 QLabel#SectionLabel { color: $text_muted; font-size: 10px; font-weight: 700; }
+QPushButton#SectionToggle {
+    background: transparent;
+    border: none;
+    color: $text_muted;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+    padding: 10px 0 2px 4px;
+}
+QPushButton#SectionToggle:hover { color: $text; }
 QLabel#PageTitle { font-size: 24px; font-weight: 700; }
 QLabel#DialogTitle { font-size: 20px; font-weight: 700; }
 QLabel#MutedLabel, QLabel#CardGroup { color: $text_muted; }
@@ -122,6 +149,11 @@ QPushButton[variant="primary"] {
 QPushButton[variant="primary"]:hover {
     background-color: $primary_hover;
     border-color: $primary_hover;
+}
+QPushButton[variant="primary"]:disabled {
+    background-color: $surface_alt;
+    border-color: $border;
+    color: $text_muted;
 }
 QPushButton[variant="secondary"] { background-color: transparent; }
 QPushButton[variant="danger"] {
@@ -273,6 +305,19 @@ QProgressBar {
     border-radius: 3px;
 }
 QProgressBar::chunk { background-color: $primary; border-radius: 3px; }
+
+QFrame#WheelPanel {
+    background-color: $surface;
+    border: 1px solid $border;
+    border-radius: 12px;
+}
+QFrame#WheelResult {
+    background-color: $surface_alt;
+    border: 1px solid $border;
+    border-radius: 10px;
+}
+QFrame#WheelPanel QLabel, QFrame#WheelResult QLabel { background: transparent; }
+QLabel#WheelWinner { font-size: 22px; font-weight: 700; }
 
 QRubberBand {
     background-color: $selection_fill;
