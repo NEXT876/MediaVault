@@ -2,34 +2,42 @@ import json
 import os
 import threading
 
+import pytest
+
 from mediavault.models import MediaDatabase, MediaItem
 
 
-def test_random_smart_only_from_pool(tmp_path):
+@pytest.mark.parametrize("smart", [False, True])
+def test_random_picks_only_from_the_given_pool(tmp_path, smart):
     db = MediaDatabase(str(tmp_path / "m.json"))
-    db.load()
-    db.entries = [MediaItem("A", score=1), MediaItem("B", score=99)]
-    chosen = db.get_random(db.entries, smart=True)
-    assert chosen in db.entries
+    outside = MediaItem("outside", score=100)
+    pool = [MediaItem("A", score=1), MediaItem("B", score=1)]
+    db.entries = [outside, *pool]
+
+    picks = {db.get_random(pool, smart=smart).title for _ in range(200)}
+
+    assert picks == {"A", "B"}
 
 
-def test_save_is_atomic(tmp_path):
+def test_save_leaves_no_temp_file(tmp_path):
     path = tmp_path / "m.json"
     db = MediaDatabase(str(path))
     db.load()
     db.entries = [MediaItem("A")]
     db.save()
-    assert path.exists()
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["title"] == "A"
     assert not (tmp_path / "m.json.tmp").exists()
 
 
 def test_concurrent_adds_keep_every_entry(tmp_path):
+    # Smoke test only: it would not reliably catch a missing lock.
     path = tmp_path / "m.json"
     db = MediaDatabase(str(path))
     db.load()
+    count = 8
     threads = [
         threading.Thread(target=db.add, args=(MediaItem(f"T{index}"),))
-        for index in range(8)
+        for index in range(count)
     ]
 
     for thread in threads:
@@ -38,8 +46,8 @@ def test_concurrent_adds_keep_every_entry(tmp_path):
         thread.join()
 
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert len(db.entries) == 8
-    assert len(stored) == 8
+    assert len(db.entries) == count
+    assert {item["title"] for item in stored} == {f"T{i}" for i in range(count)}
 
 
 def test_load_corrupt_file_reports_error_and_backup(tmp_path):

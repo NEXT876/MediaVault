@@ -227,9 +227,9 @@ def test_rule34_settings_default_for_old_config():
 def test_rule34_settings_round_trip(tmp_path):
     path = tmp_path / "configs.json"
     config = VaultConfig(
-        "A",
-        MODE_NORMAL,
-        "a.json",
+        name="A",
+        mode=MODE_NORMAL,
+        db_path="a.json",
         rule34=Rule34Settings(
             api_key="key",
             user_id="42",

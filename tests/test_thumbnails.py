@@ -4,9 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
-
-QtGui = pytest.importorskip("PyQt6.QtGui", exc_type=ImportError)
-QImage = QtGui.QImage
+from PyQt6.QtGui import QImage
 
 from mediavault.gui import thumbnails
 from mediavault.gui.thumbnails import load_thumbnail

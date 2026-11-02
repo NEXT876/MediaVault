@@ -49,14 +49,14 @@ def test_second_copy_of_the_same_run_is_skipped(tmp_path):
 
 def test_name_collision_gets_a_suffix(tmp_path):
     target = tmp_path / "library"
-    existing = _write(target / "a.png", b"old")
+    _write(target / "a.png", b"old")
     source = _write(tmp_path / "inbox" / "a.png", b"new")
 
     result = copy_into_folder([source], str(target))
 
     assert result.copied == [str(target / "a-2.png")]
     assert (target / "a.png").read_bytes() == b"old"
-    assert existing
+    assert (target / "a-2.png").read_bytes() == b"new"
 
 
 def test_file_already_inside_the_folder_is_kept(tmp_path):
@@ -73,7 +73,8 @@ def test_missing_source_is_reported_as_failure(tmp_path):
     result = copy_into_folder([str(tmp_path / "nope.png")], str(tmp_path / "lib"))
 
     assert result.copied == []
-    assert result.failed
+    assert len(result.failed) == 1
+    assert "nope.png" in str(result.failed[0])
 
 
 def test_unique_destination_counts_up(tmp_path):
