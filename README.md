@@ -78,10 +78,3 @@ python -m mediavault
 ```
 
 Abhängigkeiten: `PyQt6`, `opencv-python` (für Videovorschauen).
-
-## Claude-Code-Cloud-Sessions
-
-`.claude/hooks/session-start.sh` läuft nur in Cloud-Sessions: Es installiert die
-System-Bibliotheken für Qt und OpenCV sowie die Python-Pakete (damit `pytest` und
-`ruff` laufen) und richtet das Plugin [ponytail](https://github.com/DietrichGebert/ponytail)
-ein (festgenagelt auf `v5.3.3`, deklariert in `.claude/settings.json`).
