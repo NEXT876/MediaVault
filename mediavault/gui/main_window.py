@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
 
         self.db = MediaDatabase(self.config.db_path)
         self.db.load()
+        QTimer.singleShot(0, lambda: self._report_load_error(self.db))
         # Keyed by db_path, so switching back reuses the object a background
         # download is writing to instead of overwriting its entries.
         self._databases: dict[str, MediaDatabase] = {self.config.db_path: self.db}
@@ -616,6 +617,23 @@ class MainWindow(QMainWindow):
                     database.relativize(dlg.migrate_root)
             self._activate_config(dlg.target_db_path)
 
+    def _report_load_error(self, database: MediaDatabase) -> None:
+        """Tell the user once that a database could not be loaded."""
+        if not database.load_error:
+            return
+        lines = [
+            f"Die Mediathek „{database.filepath}“ konnte nicht geladen werden:",
+            database.load_error,
+        ]
+        if database.backup_path:
+            lines.append(f"Eine Sicherung liegt unter {database.backup_path}.")
+        if database.read_only:
+            lines.append(
+                "Änderungen werden nicht gespeichert, bis die Datei lesbar ist."
+            )
+        QMessageBox.warning(self, "Mediathek nicht geladen", "\n\n".join(lines))
+        database.load_error = ""
+
     def _activate_config(self, db_path: str) -> None:
         """Load a config by path, reuse its database and refresh the window."""
         self.configs, _last = load_configs()
@@ -629,6 +647,7 @@ class MainWindow(QMainWindow):
             self.db = MediaDatabase(self.config.db_path)
             self.db.load()
             self._databases[self.config.db_path] = self.db
+            self._report_load_error(self.db)
 
         self.thumbnail_cache.clear()
         self.recent_picks = []

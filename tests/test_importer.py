@@ -231,3 +231,40 @@ def test_transfer_failure_is_counted_and_stores_new_path(tmp_path):
 
     assert result.added == 1 and result.failed == 1
     assert db.entries[0].image_path == "ok.png"
+
+
+def test_import_holds_lock_against_concurrent_add(tmp_path):
+    import threading
+
+    db = _db(tmp_path)
+    first = tmp_path / "first.png"
+    first.write_bytes(b"same")
+    twin = tmp_path / "twin.png"
+    twin.write_bytes(b"same")
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_transfer(path):
+        started.set()
+        release.wait(2)
+        return path
+
+    def other_thread():
+        started.wait(2)
+        import_paths(db, [str(twin)], type_str="Bilder", group="", mode=MODE_NORMAL)
+
+    worker = threading.Thread(target=other_thread)
+    worker.start()
+    timer = threading.Timer(0.2, release.set)
+    timer.start()
+    import_paths(
+        db,
+        [str(first)],
+        type_str="Bilder",
+        group="",
+        mode=MODE_NORMAL,
+        transfer=slow_transfer,
+    )
+    worker.join(3)
+
+    assert len(db.entries) == 1

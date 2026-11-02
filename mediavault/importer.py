@@ -134,6 +134,14 @@ def find_duplicate(
     db: MediaDatabase, path: str, type_str: str, meta: dict[str, Any], root: str = ""
 ) -> bool:
     """Return True if the file or its AI generation is already stored."""
+    with db.transaction():
+        return _find_duplicate(db, path, type_str, meta, root)
+
+
+def _find_duplicate(
+    db: MediaDatabase, path: str, type_str: str, meta: dict[str, Any], root: str
+) -> bool:
+    """Body of find_duplicate; the caller holds the database lock."""
     index = _Index(db, type_str, root)
     try:
         file_hash = content_hash(path)
@@ -160,7 +168,24 @@ def import_paths(
     transfer, if given, copies an accepted file into the library and returns
     its new path (None on failure). It only runs once the file passed every
     check, so rejected files never leave stray copies behind.
+
+    The whole run holds the database lock, so a concurrent add from another
+    thread cannot slip past the duplicate check.
     """
+    with db.transaction():
+        return _import_paths(db, paths, type_str, group, mode, root, transfer)
+
+
+def _import_paths(
+    db: MediaDatabase,
+    paths: Iterable[str],
+    type_str: str,
+    group: str,
+    mode: str,
+    root: str,
+    transfer: Callable[[str], str | None] | None,
+) -> ImportResult:
+    """Body of import_paths; the caller holds the database lock."""
     result = ImportResult()
     index = _Index(db, type_str, root)
     new_entries: list[MediaItem] = []
