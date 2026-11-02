@@ -66,6 +66,16 @@ class VaultConfig:
     folder_rel: str = ""
     rule34: Rule34Settings = field(default_factory=Rule34Settings)
 
+    @property
+    def is_ai(self) -> bool:
+        """Return True for configs that only hold AI images with metadata."""
+        return self.mode == MODE_AI
+
+    @property
+    def has_folder(self) -> bool:
+        """Return True when the config manages a media folder, local or on a stick."""
+        return bool(self.folder.strip() or self.volume_uuid)
+
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
         """Build a config from stored data, falling back to safe defaults.

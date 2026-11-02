@@ -483,6 +483,76 @@ class GroupRandomDialog(QDialog):
         self.accept()
 
 
+class GroupPickDialog(QDialog):
+    """Dialog to choose which groups are put on the wheel of fortune."""
+
+    def __init__(self, parent: QWidget | None, groups: list[str]) -> None:
+        """Show one checkbox per group, all checked at first."""
+        super().__init__(parent)
+        self.selected_groups: list[str] = []
+        self.setWindowTitle("Gruppen aufs Glücksrad")
+        self.setMinimumSize(340, 420)
+        self.resize(380, 480)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        layout.addWidget(field_label("Gruppen"))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        vbox.setContentsMargins(4, 4, 4, 4)
+        vbox.setSpacing(6)
+        self.group_boxes: dict[str, QCheckBox] = {}
+        for group in groups:
+            box = QCheckBox(group)
+            box.setChecked(True)
+            box.toggled.connect(self._sync_ok)
+            vbox.addWidget(box)
+            self.group_boxes[group] = box
+        vbox.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn_all = QPushButton("Alle")
+        btn_all.setProperty("variant", "ghost")
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none = QPushButton("Keine")
+        btn_none.setProperty("variant", "ghost")
+        btn_none.clicked.connect(lambda: self._set_all(False))
+        btn_cancel = QPushButton("Abbrechen")
+        btn_cancel.setProperty("variant", "ghost")
+        btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Übernehmen")
+        self.btn_ok.setProperty("variant", "primary")
+        self.btn_ok.clicked.connect(self._accept)
+        row.addWidget(btn_all)
+        row.addWidget(btn_none)
+        row.addStretch()
+        row.addWidget(btn_cancel)
+        row.addWidget(self.btn_ok)
+        layout.addLayout(row)
+        self._sync_ok()
+
+    def _set_all(self, checked: bool) -> None:
+        for box in self.group_boxes.values():
+            box.setChecked(checked)
+
+    def _sync_ok(self) -> None:
+        """Allow confirming only while at least one group is checked."""
+        self.btn_ok.setEnabled(any(b.isChecked() for b in self.group_boxes.values()))
+
+    def _accept(self) -> None:
+        self.selected_groups = [
+            group for group, box in self.group_boxes.items() if box.isChecked()
+        ]
+        self.accept()
+
+
 class ConfigDialog(QDialog):
     """Dialog to open an existing vault config or create a new one."""
 

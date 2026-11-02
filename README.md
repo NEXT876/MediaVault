@@ -2,6 +2,8 @@
 
 Ein Desktop-Tool zum Verwalten, Bewerten und Durchstöbern von Medien (Bilder und Videos) – mit Bewertungssystem, Zufallsauswahl und Batch-Funktionen.
 
+![MediaVault-Hauptfenster im dunklen Theme mit Bildkacheln, Scores und Gruppen](docs/screenshots/main_window.png)
+
 ## Überblick
 
 MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mit der du deine Bilder- und Videosammlung organisierst, bewertest und per Zufall durchstöbern kannst. Alle Einträge werden in einer lokalen JSON-Datei (`~/.mediavault/media_data.json`) gespeichert. Die Oberfläche bietet ein modernes Dark- und Light-Theme.
@@ -19,8 +21,10 @@ MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mi
 - **Thumbnails**: Automatische Vorschaubilder über OS-Thumbnails (nur Linux) bzw. extrahierte Videoframes (via OpenCV); einmal erzeugte Vorschauen liegen als WebP in `~/.mediavault/thumbs` und sind auch ohne Stick da
 - **Stick-Modus**: USB-Stick einstecken, `🔌 Stick einrichten` öffnen, Ordner wählen – entweder als neue Config anlegen oder die aktive Config darauf umstellen. Referenzen werden relativ zur Stick-Identität gespeichert (Marker-Datei `.mediavault-vault`), damit ein anderer Laufwerksbuchstabe nichts kaputt macht
 - **Kopieren beim Hinzufügen**: Bilder und Videos, die von Hand importiert werden, kopiert die App in den Ordner der aktiven Config
+- **Glücksrad**: Unter `🎡 Glücksrad` eigene Einträge (eine Zeile pro Option) eingeben und per Klick, Button oder Strg+Enter drehen – passt sich dem aktiven Theme an. Eintragslisten lassen sich als Configs speichern, anwenden und löschen (`~/.mediavault/wheel_configs.json`); mit einem Klick landen alle oder ausgewählte Gruppen der Bibliothek auf dem Rad (mit Warnung, falls die aktuellen Einträge noch nicht als Config gespeichert sind)
 - **Responsive Grid**: Die Kachelansicht passt die Spaltenanzahl automatisch an die Fenstergröße an
 - **Themes**: Dark und Light live umschaltbar; die Auswahl bleibt über Neustarts erhalten
+- **Import from Web**: Der rule34-Import liegt in der Seitenleiste im zuklappbaren Bereich „IMPORT FROM WEB“; er ist standardmäßig zugeklappt und merkt sich den zuletzt gewählten Zustand
 
 ## Tastenkürzel
 
@@ -40,19 +44,31 @@ MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mi
 ```
 mediavault/
 ├── __main__.py        # Einstiegspunkt, Splash-Screen
-├── config.py          # Datenbankpfad und Logging
+├── config.py          # Configs, Datenbankpfade, Stick-Auflösung, Logging
 ├── models.py          # MediaItem und MediaDatabase (JSON-Persistenz)
+├── library.py         # Filtern/Sortieren fürs Raster, Ordner indexieren
+├── importer.py        # Import mit Duplikaterkennung
+├── wheel_configs.py   # Gespeicherte Glücksrad-Configs
 ├── scanner.py         # Neue Medien in einem Ordner finden
+├── transfer.py        # Dateien in den Mediathek-Ordner kopieren
+├── volumes.py         # Stick-Marker und relative Pfade
+├── rule34.py          # rule34-API, Downloads
 ├── media_preview.py   # Videoframes und System-Thumbnails
 └── gui/
-    ├── main_window.py # Hauptfenster, Auswahl, Suche, Sortierung
+    ├── main_window.py # Hauptfenster: verdrahtet Seitenleiste, Raster, Dialoge
+    ├── sidebar.py     # Seitenleiste mit Navigation und Statusanzeigen
+    ├── card_grid.py   # Kachelraster, Auswahl, Vorschau-Cache
     ├── selection.py   # Auswahlrechteck mit Auto-Scroll
     ├── widgets.py     # Medienkacheln
-    ├── dialogs.py     # Detail-, Bearbeiten- und Gruppen-Dialoge
+    ├── collapsible.py # Einklappbare Seitenleisten-Sektion
+    ├── folder_sync.py # Ordner-Sync mit Vorschau und Import
+    ├── rule34_import.py # rule34: Posts holen, auswählen, einreihen
+    ├── downloads.py   # Download-Warteschlange
+    ├── wheel.py       # Glücksrad-Seite
+    ├── dialogs.py     # Detail-, Bearbeiten-, Gruppen- und Config-Dialoge
     ├── file_dialogs.py # Native Dateiauswahl, Dateien öffnen
     └── theme.py       # Dark-/Light-Paletten und QSS
 tests/
-└── test_media_database.py
 ```
 
 ## Start
