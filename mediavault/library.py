@@ -1,7 +1,14 @@
 """Qt-free library operations: grid filtering and indexing the media folder.
 
-The GUI decides when to run these; what they do lives here so startup scan,
-manual folder sync and tests share one implementation.
+The GUI decides when to run these; what they do lives here so the startup
+scan, the manual folder sync and the tests share one implementation.
+
+- :func:`visible_entries` filters and sorts entries for the card grid.
+- :func:`find_unindexed`, :func:`index_files` and :func:`scan` find media
+  files in the config folder that the database does not know yet and import
+  them through :func:`importer.import_paths` (duplicates are skipped there).
+- :func:`media_exts` and :func:`file_filter` define which files count as
+  media for a config mode and for the file dialogs.
 """
 
 import os
@@ -25,7 +32,10 @@ SORT_MODES = (
 
 
 def _matches(entry: MediaItem, needle: str) -> bool:
-    """Return True if the search text occurs in any searchable field."""
+    """Return True if the lowercased search text occurs in a searchable field.
+
+    Searched fields: title, description, group and the AI (negative) prompt.
+    """
     haystacks = (
         entry.title,
         entry.description,
@@ -42,7 +52,20 @@ def visible_entries(
     query: str,
     sort_mode: str,
 ) -> list[MediaItem]:
-    """Filter entries by group and text, then sort them for the card grid."""
+    """Filter entries by group and search text, then sort them for the card grid.
+
+    Args:
+        entries: All entries of the current page.
+        group_filter: Group name, or :data:`ALL_GROUPS` / empty for no filter.
+        query: Case-insensitive search text; matches title, description, group
+            and the AI prompts.
+        sort_mode: One of the keys in :data:`SORT_MODES`; unknown keys sort by
+            title.
+
+    Returns:
+        A new, sorted list. "last_watched" puts entries that were never watched
+        last; score sorting breaks ties by title.
+    """
     entries = list(entries)
     if group_filter and group_filter != ALL_GROUPS:
         entries = [entry for entry in entries if entry.group == group_filter]
@@ -75,7 +98,7 @@ def media_exts(mode: str) -> dict[MediaType, set[str]]:
 
 
 def file_filter(media_type: MediaType) -> str:
-    """Return the file-dialog filter for one media type."""
+    """Return the Qt file-dialog filter string for one media type."""
     label = "Bilder" if media_type == MediaType.IMAGE else "Videos"
     exts = IMAGE_EXTS if media_type == MediaType.IMAGE else VIDEO_EXTS
     patterns = " ".join(f"*{ext}" for ext in sorted(exts))
@@ -88,10 +111,20 @@ def find_unindexed(
     location: LibraryRoot,
     ignored: Iterable[str] = (),
 ) -> dict[MediaType, list[str]]:
-    """Return the files in the library folder the database does not know yet.
+    """Return the files in the library folder that the database does not know yet.
 
     Stored paths may be relative to the volume, so every comparison goes
     through the location's volume root.
+
+    Args:
+        db: Database of the active config.
+        mode: Config mode; decides which extensions count (:func:`media_exts`).
+        location: Where the config's media currently lives.
+        ignored: Additional paths to treat as known, e.g. files the user
+            declined in an earlier sync.
+
+    Returns:
+        New file paths per media type.
     """
     exts = media_exts(mode)
     known = [entry.file_path for entry in db.snapshot()]
@@ -112,7 +145,19 @@ def index_files(
     mode: str,
     location: LibraryRoot,
 ) -> ImportResult:
-    """Import found files into the database and return the combined counts."""
+    """Import found files into the database and return the combined counts.
+
+    Files keep their place on disk (no copy) and get no group.
+
+    Args:
+        db: Database of the active config.
+        found: File paths per media type, as returned by :func:`find_unindexed`.
+        mode: Config mode; AI configs skip files without AI metadata.
+        location: Where the config's media currently lives.
+
+    Returns:
+        Counts summed over all media types.
+    """
     total = ImportResult()
     for media_type, paths in found.items():
         if not paths:
@@ -133,7 +178,11 @@ def index_files(
 
 
 def scan(db: MediaDatabase, mode: str, location: LibraryRoot) -> ImportResult:
-    """Index every new file of the library folder; no-op while unavailable."""
+    """Index every new file of the library folder.
+
+    Does nothing and returns empty counts while the folder is unavailable, e.g.
+    because the stick is unplugged.
+    """
     if not location.available or not os.path.isdir(location.folder):
         return ImportResult()
     return index_files(db, find_unindexed(db, mode, location), mode, location)
@@ -142,6 +191,10 @@ def scan(db: MediaDatabase, mode: str, location: LibraryRoot) -> ImportResult:
 def not_indexed(
     db: MediaDatabase, paths: Iterable[str], location: LibraryRoot
 ) -> set[str]:
-    """Return the paths that an import run left out of the database."""
+    """Return the paths that an import run left out of the database.
+
+    Used after a sync to remember skipped files (duplicates, files without AI
+    metadata) so they are not offered again.
+    """
     stored = {path_key(entry.file_path, location.volume) for entry in db.snapshot()}
     return {path for path in paths if path_key(path, location.volume) not in stored}

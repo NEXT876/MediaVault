@@ -1,4 +1,18 @@
-"""Data model and JSON persistence for the media library."""
+"""Data model and JSON persistence for the media library.
+
+:class:`MediaItem` is one image or video entry with its score and viewing
+statistics. :class:`MediaDatabase` keeps all entries of one config in memory
+and writes them as a JSON list to the config's database file.
+
+Threading: background downloads add entries while the GUI thread reads and
+edits, so every access to the entry list goes through an ``RLock``. Callers
+read via :meth:`MediaDatabase.snapshot` and use
+:meth:`MediaDatabase.transaction` for read-check-write sequences.
+
+Safety: saves are atomic (temp file + ``os.replace``). A corrupt file is
+backed up and the app starts empty; an unreadable file puts the database into
+read-only mode, so a save can never overwrite data that was never loaded.
+"""
 
 import json
 import logging
@@ -19,7 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class MediaType(str, Enum):
-    """Kind of a media entry; the values are what the JSON file stores."""
+    """Kind of a media entry; the values are what the JSON file stores.
+
+    The German values ("Bilder", "Videos") double as page names in the GUI and
+    must not change, or existing database files would no longer match.
+    """
 
     IMAGE = "Bilder"
     VIDEO = "Videos"
@@ -33,8 +51,27 @@ class MediaType(str, Enum):
 class MediaItem:
     """A single media entry (image or video).
 
+    Paths are stored as given by :func:`volumes.stored_path`: absolute for local
+    files, relative to the stick root for media on a vault volume. Use
+    :meth:`resolve` to turn them into usable paths.
+
     Identity semantics are intentional: entries are stored in sets and compared
     with ``in`` throughout the GUI, so equality must remain object identity.
+
+    Attributes:
+        title: Display title of the card.
+        image_path: Image file, or the preview image of a video entry.
+        score: User rating, 1-100.
+        description: Free text shown in the detail dialog.
+        entry_type: A :class:`MediaType` value.
+        video_link: Video file of a video entry; empty for images.
+        watched_counter: How often the entry was opened for viewing.
+        last_watched: Unix time of the last viewing, 0 if never.
+        rating_count: How often the entry was rated.
+        group: Optional single group name used for filtering and random picks.
+        ai_meta: Generation metadata of AI images (prompt, model, seed …).
+        content_hash: :func:`importer.content_hash` of the file, used for
+            duplicate detection and as the thumbnail cache key.
     """
 
     title: str
@@ -70,7 +107,15 @@ class MediaItem:
             self.image_path = path
 
     def resolve(self, root: str) -> str:
-        """Return the entry's file path resolved against a volume root."""
+        """Return the entry's own file as an absolute path.
+
+        Args:
+            root: Mount point of the config's volume, or empty for local configs.
+
+        Returns:
+            The absolute path, or an empty string when a relative path cannot be
+            resolved because no volume root is known.
+        """
         return volumes.absolute_path(self.file_path, root)
 
     def to_dict(self) -> dict[str, Any]:
@@ -79,7 +124,11 @@ class MediaItem:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "MediaItem":
-        """Build an entry from a dictionary, ignoring unknown keys."""
+        """Build an entry from a stored dictionary, ignoring unknown keys.
+
+        Unknown keys are dropped so files written by newer versions still load;
+        missing keys take the dataclass defaults so older files load too.
+        """
         known = {key: value for key, value in data.items() if key in _ITEM_FIELDS}
         return cls(**known)
 
@@ -88,7 +137,17 @@ _ITEM_FIELDS = frozenset(field.name for field in fields(MediaItem))
 
 
 class MediaDatabase:
-    """Stores media entries and persists them to a JSON file."""
+    """Stores the media entries of one config and persists them to a JSON file.
+
+    Attributes:
+        filepath: Path of the JSON database.
+        entries: The loaded entries; read through :meth:`snapshot` from other
+            threads.
+        load_error: Human-readable reason when :meth:`load` failed, else empty.
+        backup_path: Copy of a corrupt file made by :meth:`load`, else empty.
+        read_only: True when the file exists but could not be read; all saves
+            are refused to protect it.
+    """
 
     def __init__(self, filepath: str = "media_data.json") -> None:
         """Create a database bound to ``filepath`` with no loaded entries."""
@@ -105,12 +164,22 @@ class MediaDatabase:
 
     @contextmanager
     def transaction(self) -> Iterator["MediaDatabase"]:
-        """Hold the database lock for a read-check-write sequence."""
+        """Hold the database lock for a read-check-write sequence.
+
+        Use it when a decision depends on the current entries, e.g. checking for a
+        duplicate before adding, so no other thread can add in between.
+        """
         with self._lock:
             yield self
 
     def load(self) -> None:
-        """Load entries from the JSON file, if it exists."""
+        """Load entries from the JSON file, if it exists.
+
+        A missing file leaves the database empty. An unreadable file sets
+        ``load_error`` and ``read_only``. A corrupt file or one with an unexpected
+        shape is copied to ``<file>.corrupt.<timestamp>`` (``backup_path``) and the
+        database starts empty; the GUI reports both cases to the user.
+        """
         with self._lock:
             self.load_error = ""
             self.backup_path = ""
@@ -145,7 +214,17 @@ class MediaDatabase:
                     logger.info("Backup angelegt: %s", backup)
 
     def relativize(self, root: str) -> int:
-        """Store paths inside a volume root relative to it; return changed entries."""
+        """Store paths inside a volume root relative to it and save if anything changed.
+
+        Used when a local library moves onto a stick, so the database keeps working
+        under any mount point.
+
+        Args:
+            root: Mount point of the vault volume.
+
+        Returns:
+            Number of entries whose paths were rewritten.
+        """
         changed = 0
         for entry in self.snapshot():
             image = volumes.stored_path(entry.image_path, root)
@@ -158,7 +237,13 @@ class MediaDatabase:
         return changed
 
     def save(self) -> None:
-        """Write all entries atomically to the JSON file."""
+        """Write all entries atomically to the JSON file.
+
+        Does nothing (and logs a warning) in read-only mode.
+
+        Raises:
+            OSError: When the file cannot be written.
+        """
         with self._lock:
             if self.read_only:
                 logger.warning("Nicht gespeichert, Datei war unlesbar: %s", self.filepath)
@@ -188,7 +273,10 @@ class MediaDatabase:
             self.save()
 
     def delete_multiple(self, entries_to_delete: Iterable[MediaItem]) -> None:
-        """Remove the given entries and persist the database."""
+        """Remove the given entries and persist the database.
+
+        Only the database entries are removed; the media files stay on disk.
+        """
         with self._lock:
             doomed = set(entries_to_delete)
             self.entries = [e for e in self.entries if e not in doomed]
@@ -200,7 +288,7 @@ class MediaDatabase:
             return list(self.entries)
 
     def get_by_type(self, entry_type: str) -> list[MediaItem]:
-        """Return all entries of the given media type."""
+        """Return all entries of the given :class:`MediaType` value."""
         return [e for e in self.snapshot() if e.entry_type == entry_type]
 
     def get_all_groups(self) -> list[str]:
@@ -213,10 +301,23 @@ class MediaDatabase:
         smart: bool = False,
         recent_picks: list[MediaItem] | None = None,
     ) -> MediaItem | None:
-        """Pick a random entry from ``pool``, optionally score-weighted.
+        """Pick a random entry from ``pool``, optionally weighted.
 
-        Entries in ``recent_picks`` are excluded unless they are the whole pool.
-        Smart weighting favors high scores and entries not watched recently.
+        Entries in ``recent_picks`` are excluded unless they make up the whole pool,
+        so repeated picks do not show the same entries again and again.
+
+        Smart weighting starts at ``score + 20``, multiplies by ``0.85`` for every
+        previous viewing, and further by ``0.3`` if the entry was watched in the
+        last day or ``0.6`` in the last week. Every weight is at least 1, so nothing
+        is ever impossible to pick.
+
+        Args:
+            pool: Candidate entries.
+            smart: True for weighted picking, False for uniform picking.
+            recent_picks: Entries picked recently.
+
+        Returns:
+            The chosen entry, or None if ``pool`` is empty.
         """
         if not pool:
             return None

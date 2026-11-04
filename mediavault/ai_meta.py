@@ -1,4 +1,20 @@
-"""Read AI generation metadata from PNG files and summarize prompts."""
+"""Read AI generation metadata from PNG files and summarize prompts.
+
+Stable Diffusion front ends store how an image was generated in PNG text
+chunks. Two formats are recognized:
+
+- Automatic1111 / Forge: a ``parameters`` chunk with prompt, negative prompt
+  and a ``Steps: …, Sampler: …, Seed: …`` settings line.
+- ComfyUI: a ``prompt`` chunk with the API workflow as JSON; the prompts are
+  found by following the sampler's conditioning links to the text encoders.
+
+The result is a flat dict (``generator``, ``prompt``, ``negative_prompt``,
+``model``, ``sampler``, ``steps``, ``cfg_scale``, ``seed``, ``width``,
+``height``; missing keys are omitted) stored in ``MediaItem.ai_meta``. It
+drives AI configs, duplicate detection by generation and the analysis dialog
+(:func:`summarize_prompts`). The PNG is parsed with the standard library only,
+skipping image data, so reading is fast even for large files.
+"""
 
 import json
 import logging
@@ -18,7 +34,7 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def _decode_text(raw: bytes) -> str:
-    """Decode PNG text as UTF-8, falling back to Latin-1."""
+    """Decode PNG text as UTF-8, falling back to Latin-1 (the tEXt standard)."""
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -26,7 +42,15 @@ def _decode_text(raw: bytes) -> str:
 
 
 def _read_text_chunks(path: str) -> dict[str, str]:
-    """Return the tEXt/iTXt chunks of a PNG keyed by their keyword."""
+    """Return the tEXt/iTXt chunks of a PNG keyed by their keyword.
+
+    Image data chunks are skipped with ``seek``, and reading stops at ``IEND``.
+    Compressed iTXt chunks are inflated; broken ones are ignored. When a keyword
+    appears twice, the first value wins. Non-PNG files give an empty dict.
+
+    Raises:
+        OSError: When the file cannot be read.
+    """
     chunks: dict[str, str] = {}
     with open(path, "rb") as f:
         if f.read(8) != _PNG_SIGNATURE:
@@ -81,7 +105,12 @@ def _as_float(value: Any) -> float | None:
 
 
 def _parse_a1111(text: str) -> dict[str, Any]:
-    """Parse an Automatic1111/Forge ``parameters`` chunk."""
+    """Parse an Automatic1111/Forge ``parameters`` chunk.
+
+    The text is "<prompt>\nNegative prompt: <negative>\nSteps: 20, Sampler: …".
+    The settings line is split at ", " into key/value pairs; model, sampler,
+    steps, CFG scale, seed and size are taken over when they parse.
+    """
     prompt_part = text.strip()
     settings_part = ""
     marker = "\nSteps:"
@@ -130,7 +159,12 @@ def _parse_a1111(text: str) -> dict[str, Any]:
 
 
 def _find_prompt_text(data: dict[str, Any], node_id: Any, seen: set[str]) -> str:
-    """Follow conditioning links until a text encoder node is found."""
+    """Follow conditioning links until a text encoder node is found.
+
+    Walks input links depth-first from ``node_id`` and returns the text of the
+    first ``CLIPTextEncode`` node; ``seen`` guards against cycles. Returns an
+    empty string when no encoder is reachable.
+    """
     key = str(node_id)
     if key in seen:
         return ""
@@ -151,7 +185,13 @@ def _find_prompt_text(data: dict[str, Any], node_id: Any, seen: set[str]) -> str
 
 
 def _parse_comfyui(data: dict[str, Any]) -> dict[str, Any]:
-    """Parse a ComfyUI ``prompt`` chunk (API workflow JSON)."""
+    """Parse a ComfyUI ``prompt`` chunk (API workflow JSON).
+
+    Uses the first (Advanced) KSampler for sampler settings and follows its
+    positive/negative inputs to the prompt texts. Without a resolvable link, all
+    text encoder prompts are joined as the positive prompt. Model and size come
+    from the checkpoint loader and the empty latent image node.
+    """
     nodes = [node for node in data.values() if isinstance(node, dict)]
     meta: dict[str, Any] = {"generator": "ComfyUI"}
     positive = negative = ""
@@ -218,7 +258,17 @@ def _parse_comfyui(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_ai_metadata(path: str) -> dict[str, Any] | None:
-    """Return generation metadata from a PNG, or None if none is recognized."""
+    """Return generation metadata from a PNG, or None if none is recognized.
+
+    Tries the A1111 format first (needs a prompt), then ComfyUI (needs a prompt
+    or a model). Non-PNG files and unreadable files return None.
+
+    Args:
+        path: Image file to inspect.
+
+    Returns:
+        The metadata dict described in the module docstring, or None.
+    """
     # shortcut: PNG only, add EXIF/XMP if JPEG AI images matter
     if os.path.splitext(path)[1].lower() != ".png":
         return None
@@ -265,7 +315,10 @@ def ai_duplicate_key(meta: dict[str, Any]) -> tuple[str, str, str, str] | None:
 
 
 def format_ai_meta(meta: dict[str, Any]) -> str:
-    """Format generation metadata as one human-readable line."""
+    """Format generation metadata as one human-readable line.
+
+    Example: ``A1111 · model · Euler a · 20 Schritte · CFG 7 · Seed 1 · 512×768``.
+    """
     parts = [
         str(meta[key]) for key in ("generator", "model", "sampler") if meta.get(key)
     ]
@@ -281,7 +334,7 @@ def format_ai_meta(meta: dict[str, Any]) -> str:
 
 
 def _prompt_tags(prompt: str) -> list[str]:
-    """Split a prompt into lowercase tags, dropping weights and parentheses."""
+    """Split a prompt into lowercase tags, dropping parentheses and weights."""
     tags = []
     for raw in prompt.split(","):
         tag = raw.strip()
@@ -294,7 +347,16 @@ def _prompt_tags(prompt: str) -> list[str]:
 
 
 def summarize_prompts(entries: Iterable[MediaItem]) -> dict[str, Any]:
-    """Compute local prompt statistics for the given entries."""
+    """Compute local prompt statistics for the analysis dialog.
+
+    Only entries with a non-empty AI prompt are counted.
+
+    Returns:
+        A dict with ``count``, ``average_score``, ``average_prompt_length``,
+        the ten most common ``top_tags``, ``models`` and ``samplers``,
+        ``top_tags_by_score`` (tags used at least three times, ranked by average
+        score) and the ten best-rated ``top_prompts`` (prompt cut to 160 chars).
+    """
     ai_entries = [
         entry for entry in entries if (entry.ai_meta.get("prompt") or "").strip()
     ]

@@ -1,5 +1,10 @@
 """Copy newly added media into a config's media folder.
 
+When a config has a media folder, manually imported files are copied there
+so the library is self-contained (e.g. on a stick). Content that is already
+stored (same :func:`importer.content_hash`) is skipped, and name collisions
+get a numeric suffix instead of overwriting.
+
 Kept free of Qt so the same code can serve the GUI and a future CLI importer.
 """
 
@@ -17,7 +22,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CopyResult:
-    """Outcome of one copy run: stored paths, skipped duplicates and failures."""
+    """Outcome of one copy run.
+
+    Attributes:
+        copied: Paths of the stored files in order: the new copy, or the
+            original path for files already inside the folder.
+        skipped: Number of files whose content was already known.
+        failed: Source paths that could not be read or copied.
+    """
 
     copied: list[str] = field(default_factory=list)
     skipped: int = 0
@@ -25,7 +37,7 @@ class CopyResult:
 
 
 def unique_destination(folder: str, name: str) -> str:
-    """Return a free path in folder, adding -2, -3, ... on name collisions."""
+    """Return a free path in ``folder``, adding -2, -3, ... on name collisions."""
     candidate = os.path.join(folder, name)
     stem, extension = os.path.splitext(name)
     index = 2
@@ -40,10 +52,19 @@ def copy_into_folder(
     folder: str,
     known_hashes: Iterable[str] = (),
 ) -> CopyResult:
-    """Copy files into folder, skipping content that is already stored.
+    """Copy files into ``folder``, skipping content that is already stored.
 
     Files that already sit inside the folder are kept where they are, so a
-    re-import never duplicates a library onto itself.
+    re-import never duplicates a library onto itself. ``shutil.copy2`` keeps
+    file timestamps. If the folder cannot be created, every path fails.
+
+    Args:
+        paths: Source files.
+        folder: Target media folder; created if missing.
+        known_hashes: Content hashes already in the database.
+
+    Returns:
+        The copied paths, the number of skipped duplicates and the failures.
     """
     result = CopyResult()
     known = {value for value in known_hashes if value}

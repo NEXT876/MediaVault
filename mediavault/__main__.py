@@ -1,4 +1,10 @@
-"""Application entry point."""
+"""Application entry point: ``python -m mediavault`` or the ``mediavault`` script.
+
+Sets up logging and the Qt application (Fusion style, shared font fallback,
+stored theme), shows a themed splash screen while :class:`MainWindow` builds,
+and then hands control to the Qt event loop. The first folder scan runs only
+after the main window has painted, so the splash never freezes mid-redraw.
+"""
 
 import sys
 
@@ -12,7 +18,15 @@ from mediavault.gui.theme import FONT_FAMILIES, ThemeManager
 
 
 def _splash_font(point_size: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
-    """Return a font using the same cross-platform family fallback as the app."""
+    """Return a splash font using the same cross-platform family fallback as the app.
+
+    Args:
+        point_size: Font size in points.
+        weight: Font weight, normal by default.
+
+    Returns:
+        A ``QFont`` configured with :data:`FONT_FAMILIES`.
+    """
     font = QFont()
     font.setFamilies(FONT_FAMILIES)
     font.setPointSize(point_size)
@@ -21,7 +35,15 @@ def _splash_font(point_size: int, weight: QFont.Weight = QFont.Weight.Normal) ->
 
 
 def _build_splash_pixmap(colors: dict[str, str]) -> QPixmap:
-    """Build a splash image matching the active theme."""
+    """Paint the splash image: the app name and a loading hint in theme colors.
+
+    Args:
+        colors: Theme palette from :meth:`ThemeManager.palette`; uses the
+            ``bg``, ``text`` and ``primary`` keys.
+
+    Returns:
+        A 420x240 pixmap for ``QSplashScreen``.
+    """
     pixmap = QPixmap(420, 240)
     pixmap.fill(QColor(colors["bg"]))
 
@@ -42,7 +64,13 @@ def _build_splash_pixmap(colors: dict[str, str]) -> QPixmap:
 
 
 def main() -> None:
-    """Start the Qt application with the stored theme and a splash screen."""
+    """Start the Qt application with the stored theme and a splash screen.
+
+    Order of work: configure logging and the Qt organization/app name (used by
+    ``QSettings``), apply the theme, show the splash, build :class:`MainWindow`,
+    then after at least 1.2 s show the window and schedule the first folder scan.
+    Never returns; exits the process with the Qt event loop's return code.
+    """
     setup_logging()
     QCoreApplication.setOrganizationName("MediaVault")
     QCoreApplication.setApplicationName("MediaVault")
@@ -63,11 +91,13 @@ def main() -> None:
     window = MainWindow(theme)
 
     def _scan_after_show() -> None:
+        """Index the config folder and fill the grid once the window is visible."""
         window.auto_scan_folder()
         window.refresh_data()
 
     # Keep the splash visible for at least 1.2 s so it does not just flash.
     def _show_main() -> None:
+        """Swap the splash for the main window and queue the first scan."""
         window.show()
         splash.finish(window)
         # Scan after the first paint so the splash is not frozen mid-redraw.

@@ -1,7 +1,14 @@
 """Import pipeline: build entries, detect duplicates and persist additions.
 
-Deliberately free of Qt so the same code can serve the file pickers and a
-future API downloader.
+A file is a duplicate when any of these is already stored for the same
+media type: the same path, the same content (:func:`content_hash`) or, for
+AI images, the same generation (prompt, seed, model …, see
+:func:`ai_meta.ai_duplicate_key`). The same file name in another folder is
+not a duplicate.
+
+Used by the manual import in the main window, the folder sync
+(:mod:`mediavault.library`) and the rule34 downloader. Deliberately free of
+Qt, so all callers share one implementation.
 """
 
 import hashlib
@@ -24,9 +31,12 @@ _CHUNK = 1024 * 1024
 def content_hash(path: str) -> str:
     """Return an identity hash for the bytes of a file.
 
-    Hashes the file size plus its first and last MiB, so hashing a library
-    with large videos stays cheap.
+    Hashes the file size plus its first and last MiB with SHA-256, so hashing a
+    library with large videos stays cheap.
     shortcut: partial hash, switch to a full hash if crafted collisions matter.
+
+    Raises:
+        OSError: When the file cannot be read.
     """
     size = os.path.getsize(path)
     digest = hashlib.sha256(str(size).encode())
@@ -39,7 +49,7 @@ def content_hash(path: str) -> str:
 
 
 def _try_hash(path: str) -> str:
-    """Return content_hash(path), or an empty string if the file is unreadable."""
+    """Return ``content_hash(path)``, or an empty string if the file is unreadable."""
     try:
         return content_hash(path)
     except OSError:
@@ -48,7 +58,17 @@ def _try_hash(path: str) -> str:
 
 @dataclass
 class ImportResult:
-    """Counts from one import run."""
+    """Counts from one import run.
+
+    Attributes:
+        added: Entries that were added to the database.
+        duplicates: Files skipped because path, content or AI generation was
+            already stored.
+        skipped_no_ai: Files skipped in AI configs because they carry no AI
+            metadata.
+        failed: Files that passed every check but could not be copied into the
+            library folder.
+    """
 
     added: int = 0
     duplicates: int = 0
@@ -61,8 +81,19 @@ def build_entry(
 ) -> MediaItem | None:
     """Build an entry from a file, requiring AI metadata in AI configs.
 
-    With a volume root the stored path is relative to that root, so the entry
-    survives a changing drive letter.
+    The title is the file name without extension. With a volume root the stored
+    path is relative to that root, so the entry survives a changing drive letter.
+
+    Args:
+        path: Absolute path of the media file.
+        type_str: :class:`MediaType` value of the new entry.
+        group: Group to assign.
+        mode: Config mode; :data:`MODE_AI` reads and requires AI metadata.
+        root: Volume root for relative storage, or empty.
+
+    Returns:
+        The unsaved entry, or None when an AI config gets a file without AI
+        metadata.
     """
     meta: dict[str, Any] = {}
     if mode == MODE_AI:
@@ -82,7 +113,12 @@ def build_entry(
 
 
 class _Index:
-    """Lookup sets for the entries already stored for one media type."""
+    """Lookup sets for the entries already stored for one media type.
+
+    Built once per import run so each file is checked in constant time. While
+    building, legacy entries without a content hash get one (``dirty`` is then
+    True and the caller saves).
+    """
 
     def __init__(self, db: MediaDatabase, type_str: str, root: str = "") -> None:
         """Collect paths, content hashes and AI generation keys from ``db``."""
@@ -110,7 +146,7 @@ class _Index:
             self.keys.add(key)
 
     def is_known(self, path_key: str, meta: dict[str, Any], file_hash: str) -> bool:
-        """Return True if path, content or generation is already stored."""
+        """Return True if path, content hash or AI generation is already stored."""
         key = ai_duplicate_key(meta)
         return (
             path_key in self.paths
@@ -127,7 +163,17 @@ class _Index:
 def find_duplicate(
     db: MediaDatabase, path: str, type_str: str, meta: dict[str, Any], root: str = ""
 ) -> bool:
-    """Return True if the file or its AI generation is already stored."""
+    """Return True if the file or its AI generation is already stored.
+
+    Used for single imports, where the user edits the entry before it is saved.
+
+    Args:
+        db: Database of the active config.
+        path: Absolute path of the candidate file.
+        type_str: Media type to compare against.
+        meta: AI metadata of the file, or an empty dict.
+        root: Volume root, so relative stored paths compare correctly.
+    """
     with db.transaction():
         index = _Index(db, type_str, root)
         found = index.is_known(volumes.path_key(path, root), meta, _try_hash(path))
@@ -148,12 +194,25 @@ def import_paths(
 ) -> ImportResult:
     """Import files as entries, skipping duplicates and files without AI metadata.
 
-    transfer, if given, copies an accepted file into the library and returns
-    its new path (None on failure). It only runs once the file passed every
-    check, so rejected files never leave stray copies behind.
+    ``transfer``, if given, copies an accepted file into the library and
+    returns its new path (None on failure). It only runs once the file passed
+    every check, so rejected files never leave stray copies behind.
 
     The whole run holds the database lock, so a concurrent add from another
-    thread cannot slip past the duplicate check.
+    thread cannot slip past the duplicate check. New entries are saved in one
+    write at the end.
+
+    Args:
+        db: Database of the active config.
+        paths: Absolute paths of the files to import.
+        type_str: :class:`MediaType` value for all new entries.
+        group: Group for all new entries.
+        mode: Config mode, see :func:`build_entry`.
+        root: Volume root for relative storage, or empty.
+        transfer: Optional copy step, see above.
+
+    Returns:
+        Counts of added, duplicate, skipped and failed files.
     """
     with db.transaction():
         result = ImportResult()

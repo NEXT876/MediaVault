@@ -1,4 +1,16 @@
-"""Application-wide paths, vault configs and logging setup."""
+"""Application-wide paths, vault configs and logging setup.
+
+A *config* (:class:`VaultConfig`) is one named collection: its own JSON
+database, an optional media folder (local or on a USB stick) and the state of
+the optional rule34 integration. All configs plus the last used one are stored
+in ``~/.mediavault/configs.json`` (:data:`CONFIGS_PATH`), written with ``0600``
+permissions because it holds API credentials.
+
+Reading is forgiving: unknown or malformed values fall back to safe defaults,
+so a damaged file never prevents the app from starting. :func:`locate`
+resolves where a config's media currently lives, which for stick configs
+depends on whether the stick is plugged in.
+"""
 
 import json
 import logging
@@ -21,7 +33,18 @@ MODE_AI = "ai"
 
 @dataclass
 class Rule34Settings:
-    """Credentials and search state of the optional rule34 integration."""
+    """Credentials and search state of the optional rule34 integration.
+
+    Attributes:
+        api_key: rule34 API key, sent with every API request.
+        user_id: rule34 user ID belonging to the API key.
+        tags: Last entered tag query (one query per line).
+        count: Number of new posts to fetch per query, 1-1000.
+        webm: True to only fetch videos (``webm`` posts).
+        last_ids: Newest post ID already downloaded per query signature, so
+            the next run only fetches newer posts.
+        saved_tags: Named tag presets, ``{name: tag query}``.
+    """
 
     api_key: str = ""
     user_id: str = ""
@@ -33,9 +56,19 @@ class Rule34Settings:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], prefix: str = "") -> "Rule34Settings":
-        """Build settings from stored data; prefix reads the old flat keys."""
+        """Build settings from stored data, validating every field.
+
+        Args:
+            data: Stored mapping, either the nested ``"rule34"`` object or a whole
+                config dict from older files.
+            prefix: Key prefix to read; ``"rule34_"`` reads the old flat keys.
+
+        Returns:
+            Settings with invalid values replaced by defaults.
+        """
 
         def get(key: str) -> Any:
+            """Read one setting, honoring the key prefix."""
             return data.get(prefix + key)
 
         return cls(
@@ -51,7 +84,21 @@ class Rule34Settings:
 
 @dataclass
 class VaultConfig:
-    """A named collection with its own database and optional scan folder."""
+    """A named collection with its own database and optional media folder.
+
+    Attributes:
+        name: Display name shown in the config switcher.
+        mode: :data:`MODE_NORMAL` for any images and videos, :data:`MODE_AI`
+            for AI-generated PNGs that carry generation metadata.
+        db_path: Path of the JSON database (:class:`MediaDatabase`).
+        folder: Absolute media folder for local configs; empty otherwise.
+        folder_last_sync: Human-readable time of the last folder sync.
+        volume_uuid: Identity of the stick the media lives on (from its
+            ``.mediavault-vault`` marker); empty for local configs.
+        volume_label: Stick name shown to the user while it is unplugged.
+        folder_rel: Media folder relative to the stick root.
+        rule34: Settings of the rule34 integration.
+    """
 
     name: str
     mode: str = MODE_NORMAL
@@ -79,8 +126,16 @@ class VaultConfig:
     def from_dict(cls, data: Mapping[str, Any]) -> "VaultConfig":
         """Build a config from stored data, falling back to safe defaults.
 
-        Files written before Rule34Settings existed keep the rule34 values as
-        flat "rule34_*" keys; they are still read.
+        Missing names become "Unbenannt", unknown modes become
+        :data:`MODE_NORMAL` and a missing database path becomes
+        :data:`DEFAULT_DB_PATH`. Files written before :class:`Rule34Settings`
+        existed keep the rule34 values as flat ``rule34_*`` keys; they are still read.
+
+        Args:
+            data: One entry of the ``"configs"`` list in ``configs.json``.
+
+        Returns:
+            The validated config.
         """
         mode = data.get("mode", MODE_NORMAL)
         nested = data.get("rule34")
@@ -103,7 +158,17 @@ class VaultConfig:
 
 
 def int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
-    """Return an integer setting clamped to a valid range."""
+    """Return an integer setting clamped to a valid range.
+
+    Args:
+        value: Raw stored value of any type.
+        default: Returned when ``value`` is not convertible to ``int``.
+        minimum: Lowest allowed result.
+        maximum: Highest allowed result.
+
+    Returns:
+        ``int(value)`` clamped to ``[minimum, maximum]``, or ``default``.
+    """
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -112,7 +177,7 @@ def int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _bool_setting(value: Any) -> bool:
-    """Return a boolean setting, accepting common JSON and string forms."""
+    """Return a boolean setting; accepts JSON booleans, 1 and "true"/"yes"."""
     if isinstance(value, str):
         return value.strip().casefold() in {"1", "true", "yes"}
     if isinstance(value, bool):
@@ -121,7 +186,7 @@ def _bool_setting(value: Any) -> bool:
 
 
 def _last_ids(value: Any) -> dict[str, int]:
-    """Return only positive integer IDs from a stored mapping."""
+    """Return only string keys with positive integer IDs from a stored mapping."""
     if not isinstance(value, Mapping):
         return {}
     result: dict[str, int] = {}
@@ -152,12 +217,24 @@ def _saved_tags(value: Any) -> dict[str, str]:
 
 
 def _default_config() -> VaultConfig:
-    """Return the config that keeps the existing library available."""
+    """Return the config that keeps the original single library at the default path."""
     return VaultConfig("Meine Mediathek", MODE_NORMAL, DEFAULT_DB_PATH)
 
 
 def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
-    """Load configs and the db_path of the last used one."""
+    """Load all configs and the database path of the last used one.
+
+    An unreadable or malformed file is logged and treated as empty; the file
+    itself is left untouched. Without any configs a default config is returned,
+    so callers always get at least one entry.
+
+    Args:
+        path: Location of ``configs.json``.
+
+    Returns:
+        ``(configs, last_db_path)``; ``last_db_path`` always matches one of the
+        returned configs.
+    """
     data: Any = {}
     if os.path.exists(path):
         try:
@@ -185,7 +262,20 @@ def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
 def save_configs(
     configs: Iterable[VaultConfig], last: str, path: str = CONFIGS_PATH
 ) -> None:
-    """Persist configs and the last used db_path atomically."""
+    """Persist configs and the last used database path atomically.
+
+    Writes to a temporary file created with ``0600`` permissions and replaces
+    the target in one step, so a crash never leaves a half-written file and the
+    API credentials stay private to the user.
+
+    Args:
+        configs: All configs to store.
+        last: ``db_path`` of the config to open on the next start.
+        path: Location of ``configs.json``.
+
+    Raises:
+        OSError: When the file cannot be written.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     data = {"last": last, "configs": [asdict(config) for config in configs]}
     tmp_path = f"{path}.tmp"
@@ -201,7 +291,7 @@ def save_configs(
 
 
 def _slug(name: str) -> str:
-    """Turn a display name into a lowercase file name."""
+    """Turn a display name into a lowercase, dash-separated file name."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
     return slug or "config"
 
@@ -216,7 +306,24 @@ def create_config(
     volume_label: str = "",
     folder_rel: str = "",
 ) -> VaultConfig:
-    """Create a config with a unique database path, without saving it."""
+    """Create a config with a unique database path, without saving it.
+
+    The database file name is derived from ``name`` and gets a ``-2``, ``-3``
+    … suffix while it collides with an existing config.
+
+    Args:
+        name: Display name; surrounding whitespace is stripped.
+        mode: :data:`MODE_NORMAL` or :data:`MODE_AI`; anything else is normal.
+        folder: Absolute media folder for local configs.
+        existing: Current configs, used to avoid database path collisions.
+        base_dir: Directory for the database; ``~/.mediavault/data`` by default.
+        volume_uuid: Stick identity for stick configs.
+        volume_label: Stick name for stick configs.
+        folder_rel: Media folder relative to the stick root.
+
+    Returns:
+        The new config; the caller adds it to the list and saves it.
+    """
     base_dir = base_dir or os.path.join(APP_DIR, "data")
     used = {config.db_path for config in existing}
     slug = candidate = _slug(name)
@@ -239,8 +346,11 @@ def create_config(
 class LibraryRoot:
     """Where a config's media lives right now.
 
-    volume is the mount point stored paths are relative to (empty for local
-    configs), folder the directory to scan (empty while unplugged).
+    Attributes:
+        volume: Mount point that stored paths are relative to; empty for
+            local configs, whose paths are absolute.
+        folder: Directory to scan for media; empty while a stick is unplugged
+            or when the config has no folder.
     """
 
     volume: str = ""
@@ -253,7 +363,18 @@ class LibraryRoot:
 
 
 def locate(config: VaultConfig) -> LibraryRoot:
-    """Resolve a config's volume mount and scan folder with a single probe."""
+    """Resolve a config's volume mount and media folder with a single probe.
+
+    Local configs return their folder directly. Stick configs search the
+    mounted volumes for the matching marker; while the stick is unplugged an
+    empty :class:`LibraryRoot` is returned.
+
+    Args:
+        config: The config to resolve.
+
+    Returns:
+        The current location of the config's media.
+    """
     if not config.volume_uuid:
         return LibraryRoot(folder=config.folder)
     root = volumes.find_volume(config.volume_uuid)
@@ -263,7 +384,7 @@ def locate(config: VaultConfig) -> LibraryRoot:
 
 
 def setup_logging() -> None:
-    """Configure root logging once with timestamps and level."""
+    """Configure root logging at INFO level with timestamps and logger names."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
