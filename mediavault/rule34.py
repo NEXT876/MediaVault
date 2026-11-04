@@ -45,8 +45,7 @@ _NET_ERRORS = (OSError, ValueError, http.client.HTTPException)
 
 
 class Rule34Error(Exception):
-    """A request or response that rule34 could not satisfy; the message is user-facing.
-    """
+    """A request rule34 could not satisfy; the message is shown to the user."""
 
 
 @dataclass

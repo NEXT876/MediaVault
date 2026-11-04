@@ -1,9 +1,9 @@
 """Preview sources for videos, safe to call outside the GUI thread.
 
-Two sources are tried by :mod:`mediavault.gui.thumbnails`: a thumbnail the
-desktop environment already cached (Linux freedesktop thumbnail spec) and,
-as fallback, a frame extracted with OpenCV. OpenCV is optional; without it
-:data:`HAS_CV2` is False and no frames are extracted.
+:mod:`mediavault.gui.thumbnails` tries two sources in order: a frame
+extracted with OpenCV and, as fallback, a thumbnail the desktop environment
+already cached (Linux freedesktop thumbnail spec). OpenCV is optional;
+without it :data:`HAS_CV2` is False and only system thumbnails are used.
 
 Only ``QImage`` is used from Qt, so workers may call these freely; callers
 turn the image into a ``QPixmap`` on the GUI thread.

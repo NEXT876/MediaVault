@@ -1,4 +1,18 @@
-"""Dialogs for the detail view, editing, configs and prompt analysis."""
+"""Modal dialogs of the main window.
+
+- :class:`DetailDialog`: preview, statistics, quick rating and playback of
+  one entry.
+- :class:`EditDialog`: create or edit an entry (title, group, description,
+  score, file paths).
+- :class:`GroupRandomDialog` / :class:`GroupPickDialog`: choose groups for
+  a random pick or for the wheel of fortune.
+- :class:`ConfigDialog`: switch to another config or create a new one.
+- :class:`FolderPreviewDialog`: confirm files found by a folder sync.
+- :class:`AnalysisDialog`: prompt statistics of an AI config.
+
+Dialogs that change entries save the database themselves, except
+:class:`EditDialog` edits of existing entries, which the caller saves.
+"""
 
 import os
 import time
@@ -43,7 +57,16 @@ from mediavault.models import MediaDatabase, MediaItem, MediaType
 
 
 class DetailDialog(QDialog):
-    """Dialog with preview, statistics and rating buttons for one entry."""
+    """Dialog with preview, statistics and rating buttons for one entry.
+
+    Rating buttons 1-5 change the score by -10/-5/0/+5/+10 (clamped to 1-100)
+    and also count as a viewing. Opening the file counts as a viewing too.
+    Every change is saved immediately.
+
+    Attributes:
+        edit_requested: True when the user asked to edit the entry; the caller
+            then opens :class:`EditDialog`.
+    """
 
     def __init__(
         self,
@@ -53,7 +76,15 @@ class DetailDialog(QDialog):
         get_pixmap_func: Callable[[MediaItem], QPixmap | None],
         root: str = "",
     ) -> None:
-        """Initialize the detail dialog for ``entry``."""
+        """Initialize the detail dialog for ``entry``.
+
+        Args:
+            parent: Parent window.
+            entry: Entry to show.
+            db: Database that is saved after ratings and viewings.
+            get_pixmap_func: Returns the entry's preview (the grid's cache).
+            root: Volume root to resolve relative paths.
+        """
         super().__init__(parent)
         self.entry = entry
         self.db = db
@@ -66,7 +97,12 @@ class DetailDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        """Build the layout with image, info, rating and action buttons."""
+        """Build the layout from top to bottom.
+
+        Preview, title, group, play button, description, AI metadata and prompts,
+        statistics, rating buttons and the edit/close actions; optional parts only
+        appear when the entry has them.
+        """
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
@@ -163,11 +199,11 @@ class DetailDialog(QDialog):
 
     @staticmethod
     def _rating_delta(rating: int) -> int:
-        """Return the score change for a rating."""
+        """Return the score change for a rating: 1 → -10, 3 → 0, 5 → +10."""
         return {1: -10, 2: -5, 3: 0, 4: 5, 5: 10}[rating]
 
     def _get_stats_text(self) -> str:
-        """Format score and counters as statistics text."""
+        """Format score, viewings and rating count as rich text."""
         return (
             f"<b>Score {self.entry.score}/100</b> · "
             f"{self.entry.watched_counter}× angesehen · "
@@ -175,12 +211,16 @@ class DetailDialog(QDialog):
         )
 
     def _persist_stats(self) -> None:
-        """Persist the updated statistics and refresh their display."""
+        """Save the database and refresh the statistics line."""
         self.db.save()
         self.lbl_stats.setText(self._get_stats_text())
 
     def _play_media(self) -> None:
-        """Open the media file and update counters and timestamp."""
+        """Open the entry's file with the system application and count a viewing.
+
+        Shows a warning instead when the file is not reachable, e.g. because the
+        stick is unplugged.
+        """
         path = self.entry.resolve(self.root)
         if not path or not os.path.isfile(path):
             QMessageBox.warning(
@@ -198,7 +238,11 @@ class DetailDialog(QDialog):
         self._persist_stats()
 
     def _apply_rating(self, rating: int) -> None:
-        """Adjust the score based on the rating (1-5) and persist it."""
+        """Apply a 1-5 rating to the score and persist it.
+
+        Also increments the viewing and rating counters and sets the last viewing
+        time, which lowers the entry's weight in smart random picks.
+        """
         self.entry.score = max(
             1, min(100, self.entry.score + self._rating_delta(rating))
         )
@@ -214,7 +258,18 @@ class DetailDialog(QDialog):
 
 
 class EditDialog(QDialog):
-    """Dialog for creating or editing a media entry."""
+    """Dialog for creating or editing a media entry.
+
+    New entries are added to the database on save. Edits of an existing entry
+    change the entry object in place; the caller saves the database after
+    ``exec()`` returned accepted. Paths inside the volume are stored relative
+    to it, and the content hash is recomputed from the entry's own file.
+
+    Attributes:
+        entry: The edited entry, or the newly created one after saving.
+        inp_img: Preview image path field; callers may prefill it.
+        inp_video: Video path field (video entries only).
+    """
 
     def __init__(
         self,
@@ -225,7 +280,17 @@ class EditDialog(QDialog):
         ai_meta: dict[str, Any] | None = None,
         root: str = "",
     ) -> None:
-        """Initialize the edit dialog for a new or existing entry."""
+        """Initialize the edit dialog for a new or existing entry.
+
+        Args:
+            parent: Parent window.
+            db: Database for group suggestions and new entries.
+            entry_type: :class:`MediaType` value for a new entry; ignored when
+                ``entry`` is given.
+            entry: Existing entry to edit, or None to create one.
+            ai_meta: AI metadata stored with a new entry.
+            root: Volume root, so paths are stored relative to the stick.
+        """
         super().__init__(parent)
         self.db = db
         self.entry = entry
@@ -239,7 +304,7 @@ class EditDialog(QDialog):
         self._populate()
 
     def _build_ui(self) -> None:
-        """Build the inputs for title, group, description, score and paths."""
+        """Build the inputs for title, group, description, score and file paths."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(10)
@@ -303,7 +368,7 @@ class EditDialog(QDialog):
     def _path_row(
         self, layout: QVBoxLayout, label: str, title: str, file_filter: str
     ) -> QLineEdit:
-        """Add a labelled path input with a button that opens a file dialog."""
+        """Add a labelled path input with a button that opens a file picker."""
         layout.addWidget(field_label(label))
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -321,7 +386,11 @@ class EditDialog(QDialog):
             line.setText(path)
 
     def _save(self) -> None:
-        """Validate the inputs and save the entry to the database."""
+        """Validate the inputs and save the entry.
+
+        A title is required; an invalid score falls back to 50 and is clamped to
+        1-100. If the file cannot be hashed, an existing entry keeps its old hash.
+        """
         if not self.inp_title.text().strip():
             QMessageBox.warning(self, "Fehler", "Titel ist erforderlich.")
             return
@@ -374,7 +443,11 @@ class EditDialog(QDialog):
 
 
 def _group_checklist(groups: list[str]) -> tuple[QScrollArea, dict[str, QCheckBox]]:
-    """Return a scroll area with one checked checkbox per group, keyed by group."""
+    """Build a scrollable list with one checked checkbox per group.
+
+    Returns:
+        ``(scroll area, {group: checkbox})``.
+    """
     content = QWidget()
     vbox = QVBoxLayout(content)
     vbox.setContentsMargins(4, 4, 4, 4)
@@ -397,10 +470,16 @@ def _checked_groups(boxes: dict[str, QCheckBox]) -> list[str]:
 
 
 class GroupRandomDialog(QDialog):
-    """Dialog to choose groups and media types for a random pick."""
+    """Dialog to choose groups and media types for a random pick.
+
+    Attributes:
+        result_pool: Entries matching the chosen groups and types, set when the
+            dialog was accepted.
+        smart: True when the user asked for a weighted ("Smart") pick.
+    """
 
     def __init__(self, parent: QWidget | None, db: MediaDatabase) -> None:
-        """Initialize the group random dialog with the database."""
+        """Initialize the dialog with the groups of ``db``."""
         super().__init__(parent)
         self.db = db
         self.result_pool: list[MediaItem] = []
@@ -445,7 +524,10 @@ class GroupRandomDialog(QDialog):
         layout.addLayout(button_row)
 
     def _execute(self, smart: bool) -> None:
-        """Build the selection pool from groups/types and close the dialog."""
+        """Build the pick pool from the chosen groups and types and close the dialog.
+
+        Requires at least one group and one media type.
+        """
         selected_groups = _checked_groups(self.group_boxes)
         selected_types = []
         if self.cb_img.isChecked():
@@ -471,7 +553,11 @@ class GroupRandomDialog(QDialog):
 
 
 class GroupPickDialog(QDialog):
-    """Dialog to choose which groups are put on the wheel of fortune."""
+    """Dialog to choose which groups are put on the wheel of fortune.
+
+    Attributes:
+        selected_groups: The checked groups, set when the dialog was accepted.
+    """
 
     def __init__(self, parent: QWidget | None, groups: list[str]) -> None:
         """Show one checkbox per group, all checked at first."""
@@ -506,6 +592,7 @@ class GroupPickDialog(QDialog):
         self._sync_ok()
 
     def _set_all(self, checked: bool) -> None:
+        """Check or uncheck every group."""
         for box in self.group_boxes.values():
             box.setChecked(checked)
 
@@ -514,12 +601,24 @@ class GroupPickDialog(QDialog):
         self.btn_ok.setEnabled(any(b.isChecked() for b in self.group_boxes.values()))
 
     def _accept(self) -> None:
+        """Remember the checked groups and close the dialog."""
         self.selected_groups = _checked_groups(self.group_boxes)
         self.accept()
 
 
 class ConfigDialog(QDialog):
-    """Dialog to open an existing vault config or create a new one."""
+    """Dialog to open an existing vault config or create a new one.
+
+    Lists every config with its mode and location (local folder or stick with
+    its connection state). Creating a config optionally takes a local folder;
+    stick configs are handed over to :class:`StickDialog`. The configs file is
+    saved by the dialog.
+
+    Attributes:
+        selected_config: Config to activate after the dialog was accepted.
+        wants_stick_setup: True when the user chose "Vom Stick…"; the caller
+            then opens the stick dialog.
+    """
 
     def __init__(
         self,
@@ -527,7 +626,13 @@ class ConfigDialog(QDialog):
         configs: list[VaultConfig],
         current_db_path: str,
     ) -> None:
-        """Initialize the dialog with the known configs."""
+        """Initialize the dialog with the known configs.
+
+        Args:
+            parent: Parent window.
+            configs: All configs; the dialog works on a copy of the list.
+            current_db_path: Database path of the active config, preselected.
+        """
         super().__init__(parent)
         self.configs = list(configs)
         self.selected_config: VaultConfig | None = None
@@ -607,7 +712,7 @@ class ConfigDialog(QDialog):
         layout.addLayout(buttons)
 
     def _choose_folder(self) -> None:
-        """Pick a scan folder for a new config."""
+        """Pick a local media folder for a new config."""
         folder = QFileDialog.getExistingDirectory(self, "Ordner wählen")
         if folder:
             self.inp_folder.setText(folder)
@@ -618,7 +723,7 @@ class ConfigDialog(QDialog):
         self.accept()
 
     def _open_selected(self) -> None:
-        """Select the highlighted config and remember it as the last one."""
+        """Select the highlighted config, store it as the last used one and close."""
         item = self.list_configs.currentItem()
         if item is None:
             QMessageBox.warning(self, "Hinweis", "Bitte eine Config auswählen.")
@@ -631,7 +736,10 @@ class ConfigDialog(QDialog):
         self.accept()
 
     def _create(self) -> None:
-        """Validate the form, create the config and make it the selected one."""
+        """Validate the form, create and save the config and select it.
+
+        Requires a unique name (case-insensitive) and, if given, an existing folder.
+        """
         name = self.inp_name.text().strip()
         if not name:
             QMessageBox.warning(self, "Fehler", "Name ist erforderlich.")
@@ -656,7 +764,11 @@ class ConfigDialog(QDialog):
 
 
 class FolderPreviewDialog(QDialog):
-    """Show images found in the config folder before they are imported."""
+    """Show the files found in the config folder before they are imported.
+
+    Displays every file as an icon with its name; accepting imports all of
+    them. Used by :class:`mediavault.gui.folder_sync.FolderSync`.
+    """
 
     THUMB = 96
 
@@ -701,7 +813,11 @@ class FolderPreviewDialog(QDialog):
 
 
 class AnalysisDialog(QDialog):
-    """Read-only local prompt statistics for the current AI config."""
+    """Read-only local prompt statistics for the current AI config.
+
+    Shows the result of :func:`ai_meta.summarize_prompts`: counts and averages,
+    top tags, models, samplers, the best-rated tags and prompts.
+    """
 
     def __init__(self, parent: QWidget | None, db: MediaDatabase) -> None:
         """Initialize the dialog from the database entries."""
@@ -724,14 +840,16 @@ class AnalysisDialog(QDialog):
 
     @staticmethod
     def _build_html(summary: dict[str, Any]) -> str:
-        """Format the summary dictionary as simple rich text."""
+        """Format the summary dictionary as rich text; all user text is HTML-escaped."""
         if not summary["count"]:
             return "<h2>Prompt-Analyse</h2><p>Keine KI-Bilder mit Prompt gefunden.</p>"
 
         def listing(rows: list[Any], formatter: Callable[[Any], str]) -> str:
+            """Join formatted rows with line breaks, or a dash when there are none."""
             return "<br>".join(formatter(row) for row in rows) or "–"
 
         def counted(row: Any) -> str:
+            """Format a ``(name, count)`` row as "name (n×)"."""
             return f"{escape(row[0])} ({row[1]}×)"
 
         tags = listing(summary["top_tags"], counted)

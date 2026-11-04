@@ -1,4 +1,18 @@
-"""rule34 import flow: settings, fetching posts, selection and queueing."""
+"""rule34 import flow: settings, fetching posts, selection and queueing.
+
+Steps driven by :class:`Rule34Import`:
+
+1. :class:`Rule34Dialog` asks for credentials and tag searches and stores
+   them in the active config.
+2. New posts and their thumbnails are fetched in a background worker
+   (:func:`rule34.fetch_posts_with_previews`); the sidebar shows a loading
+   state meanwhile.
+3. :class:`Rule34PreviewDialog` lets the user pick posts.
+4. The picked posts are queued on the :class:`DownloadsPage`.
+
+After a download job finished, :func:`remember_newest_ids` advances the
+stored "newest post" per search, so the next run only offers newer posts.
+"""
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QWidget
@@ -14,7 +28,11 @@ _TITLE = "rule34 Import"
 
 
 class Rule34Import(QObject):
-    """Run one post fetch at a time and hand selected posts to the queue."""
+    """Run one post fetch at a time and hand selected posts to the queue.
+
+    Signals:
+        loading_changed(bool): True while posts are being fetched.
+    """
 
     loading_changed = pyqtSignal(bool)
 
@@ -38,7 +56,17 @@ class Rule34Import(QObject):
         db: MediaDatabase,
         location: LibraryRoot,
     ) -> None:
-        """Ask for settings, then fetch new posts in the background."""
+        """Ask for settings, then fetch new posts in the background.
+
+        Does nothing while a fetch is already running. The result is handled by
+        :meth:`_select` on the GUI thread.
+
+        Args:
+            config: Active config; its rule34 settings are read and updated.
+            configs: All configs, needed to save the settings.
+            db: Database the downloads will be imported into.
+            location: Where the active config's media lives.
+        """
         if self._fetch is not None:
             return
         dlg = Rule34Dialog(self._parent, config, configs)
@@ -63,11 +91,15 @@ class Rule34Import(QObject):
         worker.start()
 
     def abandon(self) -> None:
-        """Drop the result of a running fetch, for example after a vault switch."""
+        """Drop the result of a running fetch, e.g. after a config switch.
+
+        The fetch itself cannot be cancelled; its result is ignored when it
+        arrives, so posts never land in the wrong library.
+        """
         self._abandoned = self._fetch is not None
 
     def _set_loading(self, loading: bool) -> None:
-        """Report the fetch state to the window and the downloads page."""
+        """Report the fetch state to the sidebar and the downloads page."""
         self._downloads.set_activity("🔎  Lade Posts von rule34 …" if loading else "")
         self.loading_changed.emit(loading)
 
@@ -78,7 +110,11 @@ class Rule34Import(QObject):
         db: MediaDatabase,
         location: LibraryRoot,
     ) -> None:
-        """Let the user pick posts from the fetch result and queue them."""
+        """Let the user pick posts from the fetch result and queue them.
+
+        Reports fetch errors, "no new posts" and an empty selection with a message
+        box instead.
+        """
         self._fetch = None
         self._set_loading(False)
         worker.deleteLater()
@@ -114,7 +150,17 @@ class Rule34Import(QObject):
 def remember_newest_ids(
     job: DownloadJob, configs: list[VaultConfig], active_db_path: str
 ) -> None:
-    """Store the newest post IDs once every selected post reached the disk."""
+    """Store the newest post IDs once every selected post reached the disk.
+
+    Jobs that failed or had failed files keep the old IDs, so their posts are
+    offered again. The IDs go to the config that owns the job's database, even
+    if the user switched configs in between, and the configs file is saved.
+
+    Args:
+        job: The finished download job.
+        configs: All configs.
+        active_db_path: Database path of the active config, saved as "last".
+    """
     if job.state is not JobState.DONE or job.failed or not job.newest_ids:
         return
     config = next((c for c in configs if c.db_path == job.db.filepath), None)

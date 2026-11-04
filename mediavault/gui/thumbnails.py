@@ -1,11 +1,14 @@
 """Preview loading and the on-disk preview cache.
 
-Loading is safe outside the GUI thread: QImage may be built there, and the
-caller converts it to a QPixmap on the GUI thread.
+Images are loaded directly; for videos a frame is extracted with OpenCV,
+falling back to the system thumbnail (:mod:`mediavault.media_preview`).
+Every preview is scaled to at most 512 px and stored as WebP under
+``~/.mediavault/thumbs``, keyed by the entry's content hash, so a library on
+a removable volume stays browsable while the volume is unplugged and
+repeated starts do not decode the originals again.
 
-Previews are cached under ~/.mediavault/thumbs keyed by the entry content
-hash, so a library on a removable volume stays browsable while the volume is
-unplugged.
+Loading is safe outside the GUI thread: ``QImage`` may be built there, and
+the caller converts it to a ``QPixmap`` on the GUI thread.
 """
 
 import hashlib
@@ -28,8 +31,16 @@ _MAX_EDGE = 512
 def cache_key(entry: MediaItem, scope: str = "") -> str:
     """Return the identity an entry preview is cached under.
 
-    Without a content hash the stored path is only unique inside one volume,
-    so the volume scope is part of the key.
+    The content hash when known, so moved or renamed files keep their preview.
+    Without a content hash the stored path is only unique inside one volume, so
+    the volume scope is part of the key.
+
+    Args:
+        entry: The entry.
+        scope: Identifies the library (e.g. the volume UUID).
+
+    Returns:
+        The key, or an empty string for entries without any path.
     """
     if entry.content_hash:
         return entry.content_hash
@@ -37,7 +48,7 @@ def cache_key(entry: MediaItem, scope: str = "") -> str:
 
 
 def cache_path(entry: MediaItem, scope: str = "") -> str:
-    """Return the cache file for an entry, or an empty string if uncacheable."""
+    """Return the WebP cache file for an entry, or an empty string if uncacheable."""
     key = cache_key(entry, scope)
     if not key:
         return ""
@@ -67,7 +78,7 @@ def _read_cache(entry: MediaItem, scope: str = "") -> QImage | None:
 
 
 def _write_cache(entry: MediaItem, image: QImage, scope: str = "") -> None:
-    """Store a preview in the cache; failures only cost a reload."""
+    """Store a preview atomically in the cache; failures only cost a reload."""
     path = cache_path(entry, scope)
     if not path:
         return
@@ -83,7 +94,12 @@ def _write_cache(entry: MediaItem, image: QImage, scope: str = "") -> None:
 
 
 def _render(entry: MediaItem, root: str) -> QImage | None:
-    """Build a preview from the source file on the volume."""
+    """Build a preview from the source file on the volume.
+
+    Uses the entry's image when set; for videos without one, an OpenCV frame,
+    then the system thumbnail. Returns None when nothing can be loaded, e.g.
+    while the stick is unplugged.
+    """
     if entry.image_path:
         path = volumes.absolute_path(entry.image_path, root)
         image = QImage(path) if path else QImage()
@@ -105,7 +121,16 @@ def _render(entry: MediaItem, root: str) -> QImage | None:
 def load_thumbnail(
     entry: MediaItem, root: str = "", scope: str = ""
 ) -> QImage | None:
-    """Load one preview, using and filling the on-disk cache."""
+    """Load one preview, using and filling the on-disk cache.
+
+    Args:
+        entry: The entry to preview.
+        root: Volume root to resolve relative paths.
+        scope: Library identity, see :func:`cache_key`.
+
+    Returns:
+        A preview of at most 512 px, or None when no source is available.
+    """
     cached = _read_cache(entry, scope)
     if cached is not None:
         return cached
@@ -122,7 +147,8 @@ def load_thumbnails(
 ) -> dict[str, QImage | None]:
     """Load previews for several entries, keyed by media path.
 
-    One broken file must not discard the previews of the whole batch.
+    Called in a worker thread by the card grid. One broken file must not
+    discard the previews of the whole batch; it maps to None instead.
     """
     previews: dict[str, QImage | None] = {}
     for entry in entries:

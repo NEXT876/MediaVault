@@ -1,4 +1,11 @@
-"""Card widget for the media grid and small widget factories for the dialogs."""
+"""Card widget for the media grid and small widget factories for the dialogs.
+
+The factories (:func:`button`, :func:`hint_label`, :func:`field_label`) set
+the object names and ``variant`` properties the stylesheet in
+:mod:`mediavault.gui.theme` targets, so every dialog looks consistent
+without repeating style code. :class:`MediaCard` is one tile of the card
+grid.
+"""
 
 from collections.abc import Callable
 
@@ -30,7 +37,15 @@ def button(
     tooltip: str = "",
     cursor: bool = False,
 ) -> QPushButton:
-    """Create a styled push button; slot is called without the checked flag."""
+    """Create a styled push button.
+
+    Args:
+        text: Button text.
+        variant: Stylesheet variant, e.g. "primary", "ghost" or "danger".
+        slot: Called on click without the ``checked`` flag Qt would pass.
+        tooltip: Optional tooltip.
+        cursor: True for a pointing-hand cursor.
+    """
     btn = QPushButton(text)
     btn.setProperty("variant", variant)
     if tooltip:
@@ -43,7 +58,7 @@ def button(
 
 
 def hint_label(text: str = "", name: str = "HintLabel") -> QLabel:
-    """Create a wrapped, muted info label (HintLabel or MutedLabel)."""
+    """Create a word-wrapped, muted info label (object name HintLabel or MutedLabel)."""
     label = QLabel(text)
     label.setObjectName(name)
     label.setWordWrap(True)
@@ -58,7 +73,7 @@ def field_label(text: str) -> QLabel:
 
 
 def score_tier(score: int) -> str:
-    """Map a score to the badge tier used for its color."""
+    """Map a score to its badge tier: high >= 75, mid >= 50, low >= 25, else bad."""
     if score >= 75:
         return "high"
     if score >= 50:
@@ -71,7 +86,7 @@ def score_tier(score: int) -> str:
 def rounded_pixmap(
     pixmap: QPixmap, size: int = IMAGE_SIZE, radius: int = IMAGE_RADIUS
 ) -> QPixmap:
-    """Scale a pixmap and round its corners for the card look."""
+    """Scale a pixmap into a centered square with rounded corners for the card."""
     scaled = pixmap.scaled(
         size,
         size,
@@ -94,7 +109,19 @@ def rounded_pixmap(
 
 
 class MediaCard(QFrame):
-    """Grid card with preview, title, score and selection state."""
+    """Grid card with preview, title, score, group and selection state.
+
+    The card only reports mouse input; the grid decides what it means for the
+    selection.
+
+    Signals:
+        clicked(MediaItem, KeyboardModifiers): Released without dragging.
+        double_clicked(MediaItem): Double-clicked with the left button.
+        drag_pressed(MediaItem, QPoint): Left button pressed (global position);
+            sent before any selection change.
+        drag_moved(QPoint): Pointer moved past the drag threshold.
+        drag_finished: Rubber-band drag ended.
+    """
 
     clicked = pyqtSignal(object, object)
     double_clicked = pyqtSignal(object)
@@ -187,14 +214,14 @@ class MediaCard(QFrame):
         self.selection_badge.raise_()
 
     def set_pixmap(self, pixmap: QPixmap | None) -> None:
-        """Show a preview, or the placeholder when there is none."""
+        """Show a preview, or the "Kein Vorschaubild" placeholder when there is none."""
         if pixmap and not pixmap.isNull():
             self.img_lbl.setPixmap(rounded_pixmap(pixmap))
         else:
             self.img_lbl.setText("Kein Vorschaubild")
 
     def set_selected(self, selected: bool) -> None:
-        """Highlight the card when it is part of the selection."""
+        """Highlight the card and show the check badge when it is selected."""
         selected = bool(selected)
         if self._selected == selected:
             return
@@ -204,7 +231,7 @@ class MediaCard(QFrame):
         repolish(self)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Remember the press position and report it before selection changes."""
+        """Remember the press position and report it before the selection changes."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
             self._press_global = event.globalPosition().toPoint()
@@ -216,7 +243,7 @@ class MediaCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Start rubber-band selection once the drag threshold is exceeded."""
+        """Report drag moves once the system drag threshold is exceeded."""
         if self._press_global is not None and (
             event.buttons() & Qt.MouseButton.LeftButton
         ):
@@ -231,7 +258,11 @@ class MediaCard(QFrame):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Emit a click or finish the rubber-band selection."""
+        """Emit a click, or finish the rubber-band selection after a drag.
+
+        The release that follows a double click is swallowed, so it does not toggle
+        the selection again.
+        """
         if event.button() == Qt.MouseButton.LeftButton:
             if self._suppress_release:
                 self._suppress_release = False
@@ -251,7 +282,7 @@ class MediaCard(QFrame):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """Open the detail view and suppress the following release event."""
+        """Request the detail view and swallow the following release event."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._suppress_release = True
             self._dragging = False
@@ -262,6 +293,6 @@ class MediaCard(QFrame):
         super().mouseDoubleClickEvent(event)
 
     def _reset_press(self) -> None:
-        """Reset the internal mouse state."""
+        """Forget the press position and drag state."""
         self._press_global = None
         self._dragging = False

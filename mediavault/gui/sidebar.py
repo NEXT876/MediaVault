@@ -1,4 +1,12 @@
-"""Sidebar with views, storage, random picks, online import, extras and settings."""
+"""Sidebar with views, storage, random picks, online import, extras and settings.
+
+The sidebar is purely presentational: every button emits a signal that
+:class:`mediavault.gui.main_window.MainWindow` handles, and the window pushes
+state back through the ``set_*`` methods (current page, stick status, sync
+time, download count, theme). Sections that do not fit the active config
+are hidden by :meth:`Sidebar.set_mode`: AI configs have no videos page and
+no web import, but get the analysis and folder sync buttons.
+"""
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
@@ -29,7 +37,7 @@ def _hint_label() -> QLabel:
 
 
 def _nav_button(text: str, checkable: bool = False) -> QPushButton:
-    """Create a left-aligned navigation btn."""
+    """Create a left-aligned nav button; checkable ones are mutually exclusive."""
     btn = QPushButton(text)
     btn.setProperty("nav", True)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -40,7 +48,22 @@ def _nav_button(text: str, checkable: bool = False) -> QPushButton:
 
 
 class Sidebar(QWidget):
-    """Left navigation column; it only reports clicks and shows state."""
+    """Left navigation column; it only reports clicks and shows state.
+
+    Signals:
+        view_requested(MediaType): Show the images or videos page.
+        downloads_requested: Show the downloads page.
+        random_requested(bool, bool): Random pick; ``(smart, global pool)``.
+        group_random_requested: Random pick from chosen groups.
+        stick_requested: Open the stick setup.
+        analysis_requested: Open the AI prompt analysis.
+        sync_requested: Sync the config folder now.
+        rule34_requested: Open the rule34 import.
+        wheel_requested: Show the wheel of fortune.
+        config_requested: Open the config switcher.
+        theme_requested: Toggle dark/light theme.
+        new_requested: Create a new entry.
+    """
 
     view_requested = pyqtSignal(object)
     downloads_requested = pyqtSignal()
@@ -141,7 +164,7 @@ class Sidebar(QWidget):
         layout.addWidget(btn_new)
 
     def _add(self, layout: QVBoxLayout, text: str, signal: pyqtSignal) -> QPushButton:
-        """Add a navigation btn that emits ``signal`` when clicked."""
+        """Add a navigation button that emits ``signal`` when clicked."""
         btn = _nav_button(text)
         btn.clicked.connect(lambda _=False: signal.emit())
         layout.addWidget(btn)
@@ -150,7 +173,7 @@ class Sidebar(QWidget):
     def _add_random(
         self, layout: QVBoxLayout, text: str, smart: bool, global_pool: bool
     ) -> None:
-        """Add a btn that asks for a random pick."""
+        """Add a button that requests a random pick with this pool and weighting."""
         btn = _nav_button(text)
         btn.clicked.connect(
             lambda _=False: self.random_requested.emit(smart, global_pool)
@@ -159,7 +182,13 @@ class Sidebar(QWidget):
 
     # --- State ---
     def set_mode(self, ai: bool, has_folder: bool) -> None:
-        """Show only the sections that fit the active config's mode."""
+        """Show only the sections that fit the active config's mode.
+
+        Args:
+            ai: True for AI configs: hides videos and web import, shows analysis.
+            has_folder: True when the config has a folder; enables folder sync
+                (AI configs only).
+        """
         self._view_buttons[MediaType.VIDEO].setVisible(not ai)
         for widget in self._ai_widgets:
             widget.setVisible(ai)
@@ -168,7 +197,7 @@ class Sidebar(QWidget):
         self._online_section.setVisible(not ai)
 
     def set_page(self, page: MediaType | str) -> None:
-        """Check the button of a library view, DOWNLOADS or WHEEL."""
+        """Check the button of the shown page: a MediaType, DOWNLOADS or WHEEL."""
         for media_type, btn in self._view_buttons.items():
             btn.setChecked(media_type == page)
         self._btn_downloads.setChecked(page == DOWNLOADS)
@@ -189,12 +218,17 @@ class Sidebar(QWidget):
         self._btn_sync.setEnabled(not running)
 
     def set_rule34_loading(self, loading: bool) -> None:
-        """Show that posts are being fetched."""
+        """Disable the rule34 button and show a loading text while posts are fetched."""
         self._btn_rule34.setEnabled(not loading)
         self._btn_rule34.setText("⬇️  Lade Posts …" if loading else "⬇️  rule34 Import")
 
     def set_downloads(self, open_jobs: int, has_jobs: bool) -> None:
-        """Mirror the download queue on its button."""
+        """Mirror the download queue on its button.
+
+        Args:
+            open_jobs: Waiting and running jobs, shown as a count.
+            has_jobs: False hides the button entirely.
+        """
         self._btn_downloads.setText(
             f"⬇️  Downloads ({open_jobs})" if open_jobs else "⬇️  Downloads"
         )

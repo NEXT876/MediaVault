@@ -1,4 +1,14 @@
-"""Background download queue page and its job cards."""
+"""Background download queue page and its job cards.
+
+Each confirmed rule34 import becomes a :class:`DownloadJob`. The
+:class:`DownloadsPage` runs one job at a time in a :class:`Worker` thread
+(:func:`rule34.download_and_import`), so the library stays usable while files
+download, and shows every job as a :class:`DownloadRow` with live progress.
+The worker reports progress through a Qt signal, which Qt delivers on the GUI
+thread. When a job finishes without failed files, the window stores its
+newest post IDs (:func:`rule34_import.remember_newest_ids`), so the next run
+only fetches newer posts.
+"""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -21,7 +31,7 @@ from mediavault.rule34 import Post, download_and_import
 
 
 class JobState(str, Enum):
-    """Lifecycle state of one queued download."""
+    """Lifecycle state of one queued download: waiting, running, done or error."""
 
     WAITING = "waiting"
     RUNNING = "running"
@@ -41,7 +51,27 @@ _JOB_ICONS = {
 
 @dataclass
 class DownloadJob:
-    """One rule34 import waiting in or running through the download queue."""
+    """One rule34 import waiting in or running through the download queue.
+
+    Attributes:
+        number: Running number shown as ``#n``.
+        label: Title of the job (the tag search).
+        db: Database the files are imported into; the config active when the
+            job was queued, even if the user switched since.
+        folder: Media folder of that config.
+        tags: Tag text, the fallback group.
+        posts: All fetched posts.
+        selected_ids: Post IDs the user chose to download.
+        newest_ids: Newest post ID per search signature, stored on success.
+        root: Volume root of a stick library; stored paths stay relative to it.
+        state: Current :class:`JobState`.
+        done: Finished files so far.
+        total: Files to download.
+        imported: Entries added (when done).
+        duplicates: Files already in the database (when done).
+        failed: Files that failed to download (when done).
+        detail: Error text or one line per failed file.
+    """
 
     number: int
     label: str
@@ -63,7 +93,11 @@ class DownloadJob:
 
 
 def download_status_text(job: DownloadJob) -> str:
-    """Return the short status line shown under a job's title."""
+    """Return the short status line shown under a job's title.
+
+    E.g. "Lädt Datei 3 von 10" while running, or "8 importiert, 2 Duplikate"
+    when done.
+    """
     if job.state is JobState.WAITING:
         return "Wartet in der Warteschlange"
     if job.state is JobState.RUNNING:
@@ -80,7 +114,7 @@ def download_status_text(job: DownloadJob) -> str:
 
 
 class DownloadRow(QFrame):
-    """Card on the downloads page showing one job's state and progress."""
+    """Card on the downloads page showing one job's icon, title, status and progress."""
 
     def __init__(self, job: DownloadJob) -> None:
         """Build the card and fill it with the job's current state."""
@@ -113,7 +147,7 @@ class DownloadRow(QFrame):
         self.set_job(job)
 
     def set_job(self, job: DownloadJob) -> None:
-        """Update icon, title, status, progress bar and error detail."""
+        """Update icon, title, status, progress bar and error detail from the job."""
         done_with_errors = job.state is JobState.DONE and job.failed > 0
         self.lbl_icon.setText("⚠️" if done_with_errors else _JOB_ICONS[job.state])
         self.lbl_title.setText(f"#{job.number}  {job.label}")
@@ -127,7 +161,17 @@ class DownloadRow(QFrame):
 
 
 class DownloadsPage(QWidget):
-    """Owns the download queue and runs one import at a time in the background."""
+    """Owns the download queue and runs one import at a time in the background.
+
+    Signals:
+        progress(int, int): ``(done, total)`` from the worker thread; connected
+            to :meth:`_on_progress` so the update happens on the GUI thread.
+        queue_changed: The job list or a job's state changed (sidebar badge).
+        job_finished(DownloadJob): A job reached DONE or ERROR.
+        reveal_requested: A download is still running 1.5 s after queuing; the
+            window may switch to this page.
+        emptied: :meth:`clear_finished` removed the last job.
+    """
 
     progress = pyqtSignal(int, int)
     queue_changed = pyqtSignal()
@@ -179,7 +223,18 @@ class DownloadsPage(QWidget):
         newest_ids: dict[str, int],
         root: str = "",
     ) -> None:
-        """Append a job and start it unless another download is running."""
+        """Append a job and start it unless another download is running.
+
+        Args:
+            label: Job title.
+            db: Target database.
+            folder: Media folder of the target config.
+            tags: Tag text, the fallback group.
+            posts: All fetched posts.
+            selected_ids: Post IDs to download.
+            newest_ids: Newest post ID per search signature.
+            root: Volume root of a stick library.
+        """
         self._sequence += 1
         self._jobs.append(
             DownloadJob(
@@ -257,7 +312,7 @@ class DownloadsPage(QWidget):
         layout.addWidget(self.lbl_empty)
 
     def _render(self) -> None:
-        """Sync cards, summary and empty state with the job list."""
+        """Sync job cards, summary, clear button and empty state with the jobs."""
         current = {job.number for job in self._jobs}
         for number in [number for number in self._rows if number not in current]:
             row = self._rows.pop(number)
@@ -320,7 +375,11 @@ class DownloadsPage(QWidget):
         self._render()
 
     def _finish(self) -> None:
-        """Record the worker's outcome, update the job and start the next one."""
+        """Record the worker's outcome, update the job and start the next one.
+
+        An exception from the worker marks the job as ERROR with its message;
+        per-file failures leave it DONE with the failures as detail.
+        """
         worker = self._worker
         job = self._active
         self._worker = None
@@ -345,6 +404,6 @@ class DownloadsPage(QWidget):
         self._start_next()
 
     def _request_reveal(self) -> None:
-        """Ask the window to reveal the page while a download still runs."""
+        """Ask the window to show this page if the download still runs."""
         if self._active is not None:
             self.reveal_requested.emit()
