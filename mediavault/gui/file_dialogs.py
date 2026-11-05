@@ -1,4 +1,10 @@
-"""Native file pickers and opening files with the system application."""
+"""Native file pickers and opening files with the system application.
+
+On Linux the Qt file dialog does not match KDE/GNOME, so ``kdialog`` or
+``zenity`` is used when installed; otherwise, and on other platforms, the
+Qt dialog is the fallback. The pick functions return the same tuple shape
+as ``QFileDialog`` so callers do not care which dialog ran.
+"""
 
 import logging
 import os
@@ -14,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def open_file(path: str) -> None:
-    """Open a file or URL with the system's default application."""
+    """Open a local file or an http(s) URL with the system's default application."""
     if not path:
         return
     # Qt offers a portable way to open both local files and URLs.
@@ -38,7 +44,11 @@ def _filter_patterns(file_filter: str) -> str:
 def _native_pick(
     multiple: bool, title: str, file_filter: str, start_dir: str
 ) -> list[str] | None:
-    """Run the native Linux picker, or return ``None`` to use Qt instead."""
+    """Run the native Linux picker, or return None to use Qt instead.
+
+    Prefers ``kdialog`` over ``zenity``. None means "no native picker or it
+    failed"; an empty list means the user cancelled.
+    """
     has_picker = shutil.which("kdialog") or shutil.which("zenity")
     if sys.platform != "linux" or not has_picker:
         return None
@@ -87,7 +97,17 @@ def pick_file(
     file_filter: str,
     start_dir: str = "",
 ) -> tuple[str, str]:
-    """Open a file picker for a single file and return its path."""
+    """Open a file picker for a single file.
+
+    Args:
+        parent: Parent of the Qt fallback dialog.
+        title: Dialog title.
+        file_filter: Qt filter string, e.g. from :func:`library.file_filter`.
+        start_dir: Folder to open first.
+
+    Returns:
+        ``(path, selected filter)``; the path is empty when cancelled.
+    """
     paths = _native_pick(False, title, file_filter, start_dir)
     if paths is not None:
         return (paths[0] if paths else ""), ""
@@ -100,7 +120,11 @@ def pick_files(
     file_filter: str,
     start_dir: str = "",
 ) -> tuple[list[str], str]:
-    """Open a file picker for multiple files and return their paths."""
+    """Open a file picker for multiple files.
+
+    Returns:
+        ``(paths, selected filter)``; the list is empty when cancelled.
+    """
     paths = _native_pick(True, title, file_filter, start_dir)
     if paths is not None:
         return paths, ""

@@ -1,4 +1,11 @@
-"""Manual folder sync: find new files, preview them and import on confirm."""
+"""Manual folder sync: find new files, preview them and import on confirm.
+
+Triggered by the sidebar's sync button. The scan and the import each run in
+a background worker (:func:`run_with_progress`); in between the user sees
+the found files in a :class:`FolderPreviewDialog` and confirms the import.
+The automatic startup scan does not use this class; it calls
+:func:`library.scan` directly.
+"""
 
 import os
 
@@ -17,8 +24,14 @@ _TITLE = "Ordner synchronisieren"
 class FolderSync(QObject):
     """Scan the library folder on request and import what the user confirms.
 
-    Files a sync could not import are remembered, so the next sync of the same
-    library does not offer them again.
+    Files a sync could not import (duplicates, PNGs without AI metadata) are
+    remembered, so the next sync of the same library does not offer them again.
+
+    Signals:
+        running_changed(bool): True while the scan runs, for the sidebar's
+            loading indicator.
+        synced(bool): Emitted after a completed sync; True when entries were
+            added and the grid must refresh.
     """
 
     running_changed = pyqtSignal(bool)
@@ -36,7 +49,15 @@ class FolderSync(QObject):
         self._ignored.clear()
 
     def start(self, db: MediaDatabase, mode: str, location: LibraryRoot) -> None:
-        """Search the library folder for new files in the background."""
+        """Search the library folder for new files in the background.
+
+        Shows a message instead when the config has no folder or it is missing.
+
+        Args:
+            db: Database of the active config.
+            mode: Config mode, decides which file types count.
+            location: Where the config's media currently lives.
+        """
         if not location.folder:
             QMessageBox.information(
                 self._parent, _TITLE, "Für diese Config ist kein Ordner hinterlegt."
@@ -62,7 +83,7 @@ class FolderSync(QObject):
     def _preview(
         self, worker: Worker, db: MediaDatabase, mode: str, location: LibraryRoot
     ) -> None:
-        """Show the new files and import them after confirmation."""
+        """Show the found files that still exist; import them after confirmation."""
         self.running_changed.emit(False)
         if worker.error is not None:
             QMessageBox.warning(self._parent, _TITLE, str(worker.error))

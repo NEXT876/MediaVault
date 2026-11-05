@@ -1,4 +1,12 @@
-"""Glücksrad-Seite: animiertes Rad plus Panel mit Einträgen und Ergebnis."""
+"""Wheel of fortune page: animated wheel plus a panel with entries and result.
+
+:class:`WheelWidget` paints the wheel and runs the spin animation; the
+winner is chosen up front and the end angle is computed so that slice lands
+under the top pointer (:func:`target_angle`). :class:`WheelPage` adds the
+editor (one entry per line), saved entry lists (:mod:`mediavault.wheel_configs`),
+buttons to put the library's groups on the wheel, and the result card.
+The page has nothing to do with media entries except reading group names.
+"""
 
 import math
 import random
@@ -72,6 +80,12 @@ def target_angle(current: float, index: int, count: int, turns: float) -> float:
 
     The wheel turns at least ``turns`` full rotations (but never fewer than
     3.2) past ``current`` so every spin feels like a real spin.
+
+    Args:
+        current: Current wheel angle in degrees.
+        index: Index of the winning slice.
+        count: Number of slices.
+        turns: Desired number of full rotations.
     """
     slice_deg = 360.0 / count
     target_mod = (-(index * slice_deg + slice_deg / 2.0)) % 360.0
@@ -83,7 +97,7 @@ def target_angle(current: float, index: int, count: int, turns: float) -> float:
 
 
 def _contrast_color(color: QColor) -> QColor:
-    """Return a readable text color for the given background."""
+    """Return near-black or white, whichever is readable on the given background."""
     luminance = 0.2126 * color.redF() + 0.7152 * color.greenF() + 0.0722 * color.blueF()
     return QColor("#11141c") if luminance > 0.52 else QColor("#ffffff")
 
@@ -99,7 +113,14 @@ class WheelWidget(QWidget):
     """A wheel of fortune that fits its slices to the given entries.
 
     Slices and labels are cached as painter paths and only rotated through
-    the painter transform while spinning, so the animation stays smooth.
+    the painter transform while spinning, so the animation stays smooth. The
+    cache is rebuilt when the size or the entries change. Long labels are
+    elided; the font shrinks as the number of slices grows.
+
+    Signals:
+        spinRequested: The wheel was clicked; the page decides whether to spin.
+        spinStarted: A spin animation started.
+        spinFinished(str): The animation ended; carries the winning entry.
     """
 
     spinRequested = pyqtSignal()
@@ -107,7 +128,12 @@ class WheelWidget(QWidget):
     spinFinished = pyqtSignal(str)
 
     def __init__(self, colors: dict[str, str], parent: QWidget | None = None) -> None:
-        """Create an empty wheel painted with the given theme palette."""
+        """Create an empty wheel painted with the given theme palette.
+
+        Args:
+            colors: Theme palette from :meth:`ThemeManager.palette`.
+            parent: Parent widget.
+        """
         super().__init__(parent)
         self._colors = colors
         self._entries: list[str] = []
@@ -136,12 +162,12 @@ class WheelWidget(QWidget):
     # --- API ---
     @property
     def entries(self) -> list[str]:
-        """Entries currently shown on the wheel."""
+        """Return a copy of the entries currently shown on the wheel."""
         return list(self._entries)
 
     @property
     def is_spinning(self) -> bool:
-        """Whether a spin animation is running."""
+        """Return True while a spin animation is running."""
         return self._spinning
 
     def set_colors(self, colors: dict[str, str]) -> None:
@@ -150,7 +176,11 @@ class WheelWidget(QWidget):
         self.update()
 
     def set_entries(self, entries: list[str]) -> None:
-        """Show new entries; during a spin they apply once it has finished."""
+        """Show new entries; during a spin they apply once it has finished.
+
+        Blank entries are dropped. Deferring the change keeps the result consistent
+        with the slices it was drawn on.
+        """
         cleaned = [entry for entry in (str(e).strip() for e in entries) if entry]
         if cleaned == self._entries and self._pending_entries is None:
             return
@@ -164,7 +194,11 @@ class WheelWidget(QWidget):
         self.update()
 
     def spin(self) -> None:
-        """Start a spin towards a random entry."""
+        """Start a spin towards a random entry.
+
+        Picks the winner uniformly, then animates to its angle for 3.9-5.3 s with
+        an ease-out curve. Does nothing while spinning or without entries.
+        """
         if self._spinning or not self._entries:
             return
         index = random.randrange(len(self._entries))
@@ -187,9 +221,11 @@ class WheelWidget(QWidget):
 
     # --- Qt property driven by the animation ---
     def _get_angle(self) -> float:
+        """Return the current rotation in degrees (``wheelAngle`` getter)."""
         return self._angle
 
     def _set_angle(self, value: float) -> None:
+        """Set the rotation and repaint (``wheelAngle`` setter for the animation)."""
         self._angle = float(value)
         self.update()
 
@@ -206,12 +242,17 @@ class WheelWidget(QWidget):
         super().resizeEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """A left click on the wheel asks for a spin."""
+        """Emit ``spinRequested`` on a left click when the wheel has entries."""
         if event.button() == Qt.MouseButton.LeftButton and self._entries:
             self.spinRequested.emit()
         super().mousePressEvent(event)
 
     def _on_spin_finished(self) -> None:
+        """Finish a spin: report the winner, highlight it and apply deferred entries.
+
+        When entries changed during the spin, the new entries replace the wheel
+        and no slice is highlighted.
+        """
         index = self._pending_index
         winner = ""
         if index is not None and 0 <= index < len(self._entries):
@@ -235,7 +276,11 @@ class WheelWidget(QWidget):
 
     # --- Painting ---
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Paint slices, labels, hub and pointer."""
+        """Paint the wheel at its current angle, or the empty-state hint.
+
+        Layers from bottom to top: shadow, slices, separators, depth shading, the
+        winner highlight, labels, rim, hub and pointer.
+        """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -301,6 +346,7 @@ class WheelWidget(QWidget):
         self._paint_pointer(painter, center, radius)
 
     def _paint_shadow(self, painter: QPainter, center: QPointF, radius: float) -> None:
+        """Paint a soft ring shadow around the wheel, stronger on dark themes."""
         glow_radius = radius * 1.18
         strength = 90 if QColor(self._colors["bg"]).lightness() < 128 else 22
         glow = QRadialGradient(center, glow_radius)
@@ -313,6 +359,7 @@ class WheelWidget(QWidget):
         painter.drawEllipse(center, glow_radius, glow_radius)
 
     def _paint_hub(self, painter: QPainter, center: QPointF, radius: float) -> None:
+        """Paint the center hub with its accent ring and the "SPIN" label."""
         hub_radius = self._hub_radius(radius)
         colors = self._colors
 
@@ -341,6 +388,7 @@ class WheelWidget(QWidget):
         )
 
     def _paint_pointer(self, painter: QPainter, center: QPointF, radius: float) -> None:
+        """Paint the triangular pointer at the top that marks the winner."""
         half_width = max(9.0, radius * 0.045)
         base_y = center.y() - radius - 18.0
         tip_y = center.y() - radius + 10.0
@@ -358,6 +406,7 @@ class WheelWidget(QWidget):
         painter.drawPolygon(polygon)
 
     def _paint_empty(self, painter: QPainter) -> None:
+        """Paint a dashed placeholder circle with a hint when there are no entries."""
         colors = self._colors
         center_x = self.width() / 2.0
         center_y = self.height() / 2.0
@@ -391,10 +440,12 @@ class WheelWidget(QWidget):
     # --- Geometry ---
     @staticmethod
     def _hub_radius(radius: float) -> float:
+        """Return the hub radius for a wheel radius (15 %, at least 26 px)."""
         return max(26.0, radius * 0.15)
 
     @staticmethod
     def _font_pixel_size(count: int, radius: float) -> int:
+        """Return the label font size: smaller for many slices, scaled by radius."""
         for limit, size in ((6, 18.0), (10, 16.0), (16, 14.0), (24, 12.0), (36, 10.5)):
             if count <= limit:
                 base = size
@@ -405,7 +456,12 @@ class WheelWidget(QWidget):
         return max(8, round(base * scale))
 
     def _build_cache(self) -> None:
-        """Rebuild slice and label paths for the current size."""
+        """Rebuild slice and label paths for the current size.
+
+        Slices start at 12 o'clock and go clockwise. Neighboring slices never share
+        a color, also across the seam. Labels run radially from the rim inwards and
+        are mirrored on the left half so none is upside down.
+        """
         count = len(self._entries)
         radius = max(40.0, min(self.width(), self.height()) / 2.0 - _MARGIN)
         self._radius = radius
@@ -470,7 +526,13 @@ class WheelWidget(QWidget):
 
 
 class WheelPage(QWidget):
-    """Wheel on the left, entry editor and result card on the right."""
+    """Wheel on the left, entry editor and result card on the right.
+
+    Typing in the editor updates the wheel after a 120 ms debounce. While the
+    wheel spins, every control that could replace the entries is locked.
+    Before entries are replaced (applying a config, loading groups), unsaved
+    entries trigger a warning with the option to save them first.
+    """
 
     def __init__(
         self,
@@ -481,8 +543,12 @@ class WheelPage(QWidget):
     ) -> None:
         """Build the page and fill the wheel with demo entries.
 
-        ``group_provider`` returns the group names of the active library; it
-        is called on every use so a switched library is picked up.
+        Args:
+            colors: Theme palette for the wheel.
+            group_provider: Returns the group names of the active library; it is
+                called on every use so a switched library is picked up.
+            configs_path: File for saved entry lists (tests pass their own).
+            parent: Parent widget.
         """
         super().__init__(parent)
         self._group_provider = group_provider
@@ -521,6 +587,11 @@ class WheelPage(QWidget):
         self._apply_entries()
 
     def _build_panel(self) -> QFrame:
+        """Build the right-hand panel.
+
+        Contains the config row, the group buttons, the editor, the result card
+        and the spin button.
+        """
         panel = QFrame()
         panel.setObjectName("WheelPanel")
         panel.setFixedWidth(340)
@@ -623,14 +694,19 @@ class WheelPage(QWidget):
 
     @staticmethod
     def _small_button(text: str, tooltip: str) -> QPushButton:
+        """Create a secondary button with a tooltip for the config and group rows."""
         return button(text, "secondary", tooltip=tooltip, cursor=True)
 
     # --- Configs ---
     def _current_entries(self) -> list[str]:
+        """Return the entries currently typed in the editor."""
         return parse_entries(self.editor.toPlainText())
 
     def _refresh_config_combo(self, select: str | None = None) -> None:
-        """Fill the combo from the saved configs and select ``select``."""
+        """Fill the combo from the saved configs and select ``select``.
+
+        Without saved configs, apply/delete are disabled and a placeholder is shown.
+        """
         self.combo_config.clear()
         for name in sorted(self._configs, key=str.casefold):
             self.combo_config.addItem(name, name)
@@ -646,7 +722,7 @@ class WheelPage(QWidget):
             self.combo_config.addItem("– keine Configs gespeichert –")
 
     def _persist_configs(self) -> bool:
-        """Write the configs to disk; tell the user if that fails."""
+        """Write the configs to disk; show a warning and return False on failure."""
         try:
             save_wheel_configs(self._configs, self._configs_path)
         except OSError as error:
@@ -655,7 +731,14 @@ class WheelPage(QWidget):
         return True
 
     def save_config(self) -> bool:
-        """Ask for a name and store the current entries; True when saved."""
+        """Ask for a name and store the current entries.
+
+        Suggests the name of an identical saved config or the selected one, and
+        asks before overwriting a config with different entries.
+
+        Returns:
+            True when the entries were saved.
+        """
         entries = self._current_entries()
         if not entries:
             QMessageBox.information(
@@ -686,7 +769,7 @@ class WheelPage(QWidget):
         return True
 
     def apply_config(self) -> None:
-        """Replace the wheel's entries with the selected config."""
+        """Load the selected config into the editor after :meth:`confirm_overwrite`."""
         name = self.combo_config.currentData()
         if name in self._configs and self.confirm_overwrite():
             self.editor.setPlainText("\n".join(self._configs[name]))
@@ -740,7 +823,7 @@ class WheelPage(QWidget):
         self._load_groups(list(self._group_provider()))
 
     def pick_groups(self) -> None:
-        """Let the user choose groups and put them on the wheel."""
+        """Let the user choose groups in a dialog and put them on the wheel."""
         groups = list(self._group_provider())
         if not groups:
             return self._load_groups(groups)
@@ -749,6 +832,7 @@ class WheelPage(QWidget):
             self._load_groups(dialog.selected_groups)
 
     def _load_groups(self, groups: list[str]) -> None:
+        """Put groups on the wheel after confirmation; say so when there are none."""
         if not groups:
             QMessageBox.information(
                 self, "Hinweis", "In dieser Bibliothek gibt es keine Gruppen."
@@ -762,7 +846,10 @@ class WheelPage(QWidget):
         self.wheel.set_colors(colors)
 
     def spin(self) -> None:
-        """Spin the wheel unless it is empty or already spinning."""
+        """Spin the wheel unless it is empty or already spinning.
+
+        Text typed within the debounce delay is applied to the wheel first.
+        """
         # Text typed within the debounce delay must be on the wheel first.
         if self._debounce.isActive():
             self._debounce.stop()
@@ -770,6 +857,7 @@ class WheelPage(QWidget):
         self.wheel.spin()
 
     def _apply_entries(self) -> None:
+        """Push the editor's entries to the wheel; update count and spin button."""
         entries = parse_entries(self.editor.toPlainText())
         self.wheel.set_entries(entries)
         count = len(entries)
@@ -777,6 +865,7 @@ class WheelPage(QWidget):
         self.spin_button.setEnabled(count > 0 and not self.wheel.is_spinning)
 
     def _on_spin_started(self) -> None:
+        """Lock editing and show the spinning state in the button and result card."""
         self._set_editing_enabled(False)
         self.spin_button.setEnabled(False)
         self.spin_button.setText("Dreht …")
@@ -799,6 +888,7 @@ class WheelPage(QWidget):
             self._refresh_config_combo(select=self.combo_config.currentData())
 
     def _on_spin_finished(self, winner: str) -> None:
+        """Unlock editing and fade in the winner in the result card."""
         self._set_editing_enabled(True)
         self.spin_button.setText("Drehen")
         self.spin_button.setEnabled(bool(self.wheel.entries))

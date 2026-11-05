@@ -1,4 +1,10 @@
-"""Rubber-band selection with edge auto-scrolling for the card grid."""
+"""Rubber-band selection with edge auto-scrolling for the card grid.
+
+:class:`RubberBandSelector` is fed press/move/release positions by
+:class:`mediavault.gui.card_grid.CardGrid` and draws the selection
+rectangle. Dragging near the top or bottom edge scrolls the grid so cards
+outside the visible area can be selected too.
+"""
 
 from collections.abc import Callable, Iterable
 
@@ -11,9 +17,10 @@ from mediavault.models import MediaItem
 class RubberBandSelector(QObject):
     """Track a drag over the grid and select the cards it touches.
 
-    The window keeps ownership of the selection itself; this class only turns
+    The grid keeps ownership of the selection itself; this class only turns
     pointer positions into "base selection plus touched cards" and calls
-    ``apply`` with the result.
+    ``apply`` with the result. Cards are any widgets with an ``entry``
+    attribute.
     """
 
     AUTOSCROLL_MARGIN = 24
@@ -25,7 +32,13 @@ class RubberBandSelector(QObject):
         cards: Callable[[], Iterable[QWidget]],
         apply: Callable[[set[MediaItem]], None],
     ) -> None:
-        """Bind to the grid's scroll area, its cards and the selection setter."""
+        """Bind to the grid's scroll area, its cards and the selection setter.
+
+        Args:
+            scroll_area: Scroll area whose viewport hosts the rectangle.
+            cards: Returns the current card widgets.
+            apply: Replaces the grid selection with the given entries.
+        """
         super().__init__(scroll_area)
         self._scroll_area = scroll_area
         self._cards = cards
@@ -45,13 +58,16 @@ class RubberBandSelector(QObject):
         return self._origin is not None
 
     def press(self, global_pos: QPoint, selected: Iterable[MediaItem]) -> None:
-        """Start a drag on top of the current selection."""
+        """Start a drag on top of the current selection.
+
+        The selection at press time stays selected; touched cards are added.
+        """
         self._base = set(selected)
         self._origin = global_pos
         self._last = global_pos
 
     def move(self, global_pos: QPoint) -> None:
-        """Draw the selection rectangle and select the cards it touches."""
+        """Draw the rectangle, select touched cards and auto-scroll at the edges."""
         if self._origin is None:
             return
         self._last = global_pos
@@ -70,7 +86,7 @@ class RubberBandSelector(QObject):
         self._update_autoscroll(current)
 
     def cancel(self) -> None:
-        """Hide the selection rectangle and stop auto-scrolling."""
+        """End the drag: hide the rectangle and stop auto-scrolling."""
         self._timer.stop()
         self._direction = 0
         self._origin = None
@@ -81,7 +97,7 @@ class RubberBandSelector(QObject):
             self._band.setGeometry(QRect())
 
     def cards_intersecting(self, rect: QRect) -> set[MediaItem]:
-        """Return the entries of all cards intersecting rect (viewport coords)."""
+        """Return the entries of all cards intersecting ``rect`` (viewport coords)."""
         viewport = self._scroll_area.viewport()
         hits: set[MediaItem] = set()
         for card in self._cards():
@@ -102,7 +118,7 @@ class RubberBandSelector(QObject):
         return self._band
 
     def _update_autoscroll(self, pos_in_viewport: QPoint) -> None:
-        """Start or stop scrolling at the top or bottom edge."""
+        """Start or stop scrolling when the pointer nears the top or bottom edge."""
         viewport = self._scroll_area.viewport()
         y, margin = pos_in_viewport.y(), self.AUTOSCROLL_MARGIN
         direction = -1 if y < margin else 1 if y > viewport.height() - margin else 0
@@ -113,7 +129,7 @@ class RubberBandSelector(QObject):
             self._timer.stop()
 
     def _autoscroll_step(self) -> None:
-        """Advance the scroll position while a drag is active."""
+        """Scroll one step and extend the selection; stop at the scroll limits."""
         if not self._direction or self._last is None:
             self._timer.stop()
             return

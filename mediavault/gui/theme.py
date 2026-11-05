@@ -1,4 +1,16 @@
-"""Zentrale Dark-/Light-Themes für die gesamte Oberfläche."""
+"""Central dark and light themes for the whole user interface.
+
+A theme is a color palette (:data:`PALETTES`) that fills one shared Qt
+stylesheet template, plus a matching ``QPalette`` for native dialogs and
+popups that ignore stylesheets. Widgets are styled through object names
+(e.g. ``MediaCard``, ``HintLabel``) and dynamic properties (``variant`` on
+buttons, ``selected`` on cards, ``tier`` on score badges); after changing
+such a property call :func:`repolish`.
+
+:class:`ThemeManager` applies a theme at runtime and stores the choice in
+``QSettings`` (:data:`ORGANIZATION`/:data:`APPLICATION`), which other
+widgets reuse for their own UI state.
+"""
 
 from string import Template
 
@@ -345,7 +357,7 @@ def build_stylesheet(name: str) -> str:
 
 
 def build_qpalette(name: str) -> QPalette:
-    """Return a QPalette for native dialogs and popups."""
+    """Return a QPalette for native dialogs and popups, matching the theme colors."""
     colors = PALETTES.get(name, PALETTES["dark"])
     role = QPalette.ColorRole
     palette = QPalette()
@@ -381,14 +393,25 @@ def repolish(widget: QWidget) -> None:
 
 
 class ThemeManager(QObject):
-    """Manage the active theme and persist the user's choice."""
+    """Manage the active theme and persist the user's choice.
+
+    Signals:
+        theme_changed(str): Emitted with the theme name after every apply;
+            custom-painted widgets (e.g. the wheel) pick up the new colors.
+    """
 
     theme_changed = pyqtSignal(str)
 
     def __init__(
         self, settings: QSettings | None = None, parent: QObject | None = None
     ) -> None:
-        """Load the stored theme, defaulting to dark."""
+        """Load the stored theme, defaulting to dark.
+
+        Args:
+            settings: Settings store; the app-wide one by default (tests pass
+                their own).
+            parent: Parent object.
+        """
         super().__init__(parent)
         self._settings = settings or QSettings(ORGANIZATION, APPLICATION)
         stored = str(self._settings.value(SETTINGS_KEY, "dark"))
@@ -400,11 +423,23 @@ class ThemeManager(QObject):
         return self._name
 
     def palette(self) -> dict[str, str]:
-        """Color palette of the active theme."""
+        """Return the color palette of the active theme (keys like ``bg``, ``text``)."""
         return PALETTES[self._name]
 
     def apply(self, app: QApplication, name: str | None = None) -> str:
-        """Apply a theme to the application and persist the choice."""
+        """Apply a theme to the application and persist the choice.
+
+        Sets the palette and stylesheet, restyles every existing widget and emits
+        ``theme_changed``.
+
+        Args:
+            app: The running application.
+            name: Theme to switch to; None or an unknown name reapplies the
+                current theme.
+
+        Returns:
+            The name of the applied theme.
+        """
         if name in PALETTES:
             self._name = name
         app.setPalette(build_qpalette(self._name))

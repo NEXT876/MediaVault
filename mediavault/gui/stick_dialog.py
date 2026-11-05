@@ -1,4 +1,12 @@
-"""Dialog that binds a config to a folder on a removable volume."""
+"""Dialog that binds a config to a folder on a removable volume.
+
+The user picks a drive and a folder on it. If the drive has no vault marker
+yet, the dialog asks to write one (:func:`volumes.write_marker`), so the
+folder is found again under any drive letter or mount point. Then either a
+new config is created for that folder, or the active config is switched to
+it; in the second case the main window rewrites existing entry paths
+relative to the stick (:meth:`MediaDatabase.relativize`).
+"""
 
 import os
 
@@ -28,7 +36,17 @@ from mediavault.gui.widgets import button, field_label, hint_label
 
 
 class StickDialog(QDialog):
-    """Create a config from a stick folder or bind the active config to one."""
+    """Create a config from a stick folder or bind the active config to one.
+
+    The dialog saves the configs file itself; the caller activates the result
+    by database path, which reloads the configs from that file.
+
+    Attributes:
+        target_db_path: Database path of the config to activate after the
+            dialog was accepted.
+        migrate_root: Mount point whose absolute entry paths should become
+            relative; only set when the active config was reassigned.
+    """
 
     def __init__(
         self,
@@ -36,7 +54,13 @@ class StickDialog(QDialog):
         configs: list[VaultConfig],
         config: VaultConfig,
     ) -> None:
-        """Initialize the dialog for the currently active config."""
+        """Initialize the dialog for the currently active config.
+
+        Args:
+            parent: Parent window.
+            configs: All configs; the dialog works on a copy of the list.
+            config: Active config, preselects its stick in the drive list.
+        """
         super().__init__(parent)
         self.configs = list(configs)
         self.config = config
@@ -115,7 +139,10 @@ class StickDialog(QDialog):
         layout.addLayout(buttons)
 
     def _fill_volumes(self) -> None:
-        """List every mounted volume, marking the vault-enabled ones."""
+        """List every mounted volume, marking vault volumes and their owning config.
+
+        Preselects the active config's stick, otherwise the first drive.
+        """
         self.list_volumes.clear()
         self._roots = volumes.mounted_roots()
         preselect = -1
@@ -149,7 +176,11 @@ class StickDialog(QDialog):
         self.btn_pick.setEnabled(self.list_volumes.currentItem() is not None)
 
     def _choose_folder(self) -> None:
-        """Pick a media folder on the selected drive and remember its volume."""
+        """Pick a media folder on the selected drive and remember its volume.
+
+        Offers to write the vault marker when the drive has none. Fills the name
+        field with the folder name and enables both actions.
+        """
         item = self.list_volumes.currentItem()
         if item is None:
             QMessageBox.information(self, "Stick", "Bitte zuerst ein Laufwerk wählen.")
@@ -195,7 +226,11 @@ class StickDialog(QDialog):
         self.btn_create.setEnabled(True)
 
     def _assign_to_current(self) -> None:
-        """Point the active config at the chosen folder."""
+        """Point the active config at the chosen stick folder and save.
+
+        The local folder setting is cleared; ``migrate_root`` asks the caller to
+        make existing paths relative to the stick.
+        """
         if not self._volume_uuid:
             return
         self.config.volume_uuid = self._volume_uuid
@@ -208,7 +243,10 @@ class StickDialog(QDialog):
         self.accept()
 
     def _create_new(self) -> None:
-        """Create a new config bound to the chosen folder."""
+        """Create and save a new config bound to the chosen folder.
+
+        Refuses empty names and names that already exist (case-insensitive).
+        """
         name = self.inp_name.text().strip()
         if not name:
             QMessageBox.warning(self, "Fehler", "Name ist erforderlich.")

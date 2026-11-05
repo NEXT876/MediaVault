@@ -1,4 +1,12 @@
-"""Scrollable card grid: layout, selection and background preview loading."""
+"""Scrollable card grid: layout, selection and background preview loading.
+
+:class:`CardGrid` is the central view of the images and videos pages. It
+shows one :class:`MediaCard` per entry in a responsive grid (the column count
+follows the viewport width), owns the multi-selection (click toggles,
+Shift+click selects a range, dragging draws a rubber band via
+:class:`RubberBandSelector`) and loads previews in a background
+:class:`Worker` so scrolling never waits for disk or video decoding.
+"""
 
 import logging
 from collections.abc import Iterable
@@ -19,7 +27,11 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class LoadingLabel(QLabel):
-    """Animated "loading previews" hint."""
+    """Animated "loading previews" hint.
+
+    Shows a braille spinner next to "Lade Vorschauen …" while
+    :meth:`set_running` is True.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Create the hidden label and its animation timer."""
@@ -42,7 +54,7 @@ class LoadingLabel(QLabel):
             self._timer.stop()
 
     def _spin(self) -> None:
-        """Advance the animation by one frame."""
+        """Advance the spinner animation by one frame."""
         self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
         self.setText(f"{_SPINNER_FRAMES[self._frame]}  Lade Vorschauen …")
 
@@ -50,8 +62,19 @@ class LoadingLabel(QLabel):
 class CardGrid(QScrollArea):
     """Show entries as cards and own their selection and preview cache.
 
-    Previews are cached by media path; ``None`` marks a preview that could not
-    be built, so it is not retried until ``forget_missing`` is called.
+    Previews are cached in memory by media path; ``None`` marks a preview that
+    could not be built, so it is not retried until :meth:`forget_missing` is
+    called. At most one preview worker runs at a time; entries added while it
+    runs are loaded by a follow-up worker.
+
+    Signals:
+        selection_changed: The selection changed (action bar updates).
+        open_requested(MediaItem): A card was double-clicked.
+        loading_changed(bool): Preview loading started or finished.
+
+    Attributes:
+        cards: Card widgets in grid order.
+        selected: Currently selected entries.
     """
 
     GRID_SPACING = 12
@@ -105,7 +128,13 @@ class CardGrid(QScrollArea):
         return self._thumb_worker is not None
 
     def show_entries(self, entries: Iterable[MediaItem], root: str, scope: str) -> None:
-        """Replace the cards, keep the still visible selection, load previews."""
+        """Replace the cards, keep the still visible selection and load previews.
+
+        Args:
+            entries: Entries to show, already filtered and sorted.
+            root: Volume root to resolve relative paths.
+            scope: Library identity for the disk cache (the config's volume UUID).
+        """
         self.cancel_drag()
         self._root, self._scope = root, scope
         for card in self.cards:
@@ -122,7 +151,7 @@ class CardGrid(QScrollArea):
         self._start_thumbnail_load()
 
     def _make_card(self, entry: MediaItem) -> MediaCard:
-        """Create one card wired to the grid's selection handling."""
+        """Create one card with its cached preview, wired to the selection."""
         card = MediaCard(entry, self._pixmaps.get(entry.media_path))
         card.clicked.connect(self._on_card_clicked)
         card.double_clicked.connect(self._on_card_double_clicked)
@@ -138,13 +167,16 @@ class CardGrid(QScrollArea):
         self._update_columns()
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        """React to width changes of the scroll viewport."""
+        """Recalculate the column count when the scroll viewport changes width."""
         if obj is self.viewport() and event.type() == QEvent.Type.Resize:
             self._update_columns()
         return super().eventFilter(obj, event)
 
     def _update_columns(self, force: bool = False) -> None:
-        """Compute the column count from the viewport width and re-lay cards."""
+        """Compute the column count from the viewport width and re-lay the cards.
+
+        Cards are only moved when the count changed, unless ``force`` is set.
+        """
         available = self.viewport().width() - self.SCROLLBAR_RESERVE
         cols = max(
             1, (available + self.GRID_SPACING) // (CARD_WIDTH + self.GRID_SPACING)
@@ -160,7 +192,7 @@ class CardGrid(QScrollArea):
 
     # --- Selection ---
     def set_selection(self, entries: Iterable[MediaItem]) -> None:
-        """Replace the selection and update the card highlights."""
+        """Replace the selection, update the highlights, emit ``selection_changed``."""
         self.selected = set(entries)
         for card in self.cards:
             card.set_selected(card.entry in self.selected)
@@ -181,7 +213,7 @@ class CardGrid(QScrollArea):
         self._anchor = None
 
     def escape(self) -> None:
-        """Abort an active drag, otherwise clear the selection."""
+        """Abort a drag and restore the previous selection, else clear it."""
         if self._rubber.active:
             self.cancel_drag()
             self.set_selection(self._press_snapshot)
@@ -195,7 +227,11 @@ class CardGrid(QScrollArea):
     def _on_card_clicked(
         self, entry: MediaItem, modifiers: Qt.KeyboardModifier
     ) -> None:
-        """Toggle a card, or select a range when Shift is held."""
+        """Toggle a card, or select a range from the last clicked card with Shift.
+
+        Remembers the selection before the click, so a following double click can
+        fully undo the toggle caused by its first click.
+        """
         # Snapshot before changing anything: a following double click can then
         # fully undo the toggle caused by the first click.
         self._press_snapshot = set(self.selected)
@@ -215,13 +251,19 @@ class CardGrid(QScrollArea):
         self.open_requested.emit(entry)
 
     def _on_drag_pressed(self, _entry: MediaItem, global_pos: QPoint) -> None:
-        """Capture the starting selection before the first click."""
+        """Remember the selection and start a rubber-band drag on top of it."""
         self._press_snapshot = set(self.selected)
         self._rubber.press(global_pos, self.selected)
 
     # --- Previews ---
     def pixmap(self, entry: MediaItem) -> QPixmap | None:
-        """Return an entry's preview, loading it synchronously if needed."""
+        """Return an entry's preview, loading it synchronously if needed.
+
+        Used by the detail dialog, which needs the preview right away.
+
+        Returns:
+            The preview, or None if it cannot be built.
+        """
         key = entry.media_path
         if key not in self._pixmaps:
             image = load_thumbnail(entry, self._root, self._scope)
@@ -242,7 +284,11 @@ class CardGrid(QScrollArea):
         self._pixmaps = {k: v for k, v in self._pixmaps.items() if v is not None}
 
     def wait_for_previews(self, msecs: int) -> bool:
-        """Wait up to msecs for the preview worker; True when it is done."""
+        """Wait up to ``msecs`` for the preview worker, e.g. before closing.
+
+        Returns:
+            True when no worker is running anymore.
+        """
         worker = self._thumb_worker
         if worker is not None and not worker.wait(msecs):
             return False
@@ -250,7 +296,7 @@ class CardGrid(QScrollArea):
         return True
 
     def _start_thumbnail_load(self) -> None:
-        """Load missing previews of the visible cards in the background."""
+        """Load missing previews of the visible cards in a background worker."""
         if self._thumb_worker is not None:
             return
         missing = [e for e in self.entries if e.media_path not in self._pixmaps]
@@ -266,7 +312,11 @@ class CardGrid(QScrollArea):
         worker.start()
 
     def _finish_thumbnail_load(self) -> None:
-        """Publish the loaded previews to the cards and load what is still missing."""
+        """Publish the loaded previews to the cards and load what is still missing.
+
+        Results are discarded when the library changed while the worker ran,
+        because the same relative path then names another file.
+        """
         worker = self._thumb_worker
         self._thumb_worker = None
         if worker is None:

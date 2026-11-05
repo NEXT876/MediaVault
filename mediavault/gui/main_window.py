@@ -1,4 +1,20 @@
-"""Main window of MediaVault: wires sidebar, filter bar, grid and dialogs."""
+"""Main window of MediaVault: wires sidebar, filter bar, grid, pages and dialogs.
+
+:class:`MainWindow` owns the application state at runtime:
+
+- the active config and its open :class:`MediaDatabase` (databases stay
+  open per config, so a background download keeps writing to the same
+  object after a config switch),
+- the page stack: card grid (images/videos), downloads and wheel,
+- helpers for the folder sync (:class:`FolderSync`) and the rule34 import
+  (:class:`Rule34Import`),
+- a 4 s timer that notices when the config's stick is plugged in or pulled
+  and refreshes the view.
+
+User actions from the sidebar, the top bar, the action bar and keyboard
+shortcuts end up in the methods below; they delegate the actual work to the
+Qt-free core modules and the dialogs.
+"""
 
 import logging
 import os
@@ -65,10 +81,23 @@ RECENT_PICKS = 2
 
 
 class MainWindow(QMainWindow):
-    """Main window with sidebar, filter bar, card grid and batch actions."""
+    """Main window with sidebar, filter bar, card grid and batch actions.
+
+    Attributes:
+        config: Active :class:`VaultConfig`.
+        configs: All configs, reloaded from disk on every config switch.
+        db: Database of the active config.
+        current_view: Media type shown by the grid.
+        recent_picks: Last random picks, excluded from the next pick so the
+            same entries do not come up again and again.
+    """
 
     def __init__(self, theme_manager: ThemeManager | None = None) -> None:
-        """Load the last used config and build the user interface."""
+        """Load the last used config and build the user interface.
+
+        Args:
+            theme_manager: Shared theme manager; a new one when omitted (tests).
+        """
         super().__init__()
         self.resize(1180, 820)
         self.theme = theme_manager or ThemeManager()
@@ -104,7 +133,11 @@ class MainWindow(QMainWindow):
 
     # --- UI construction ---
     def _setup_ui(self) -> None:
-        """Build the sidebar, top bar, action bar and the page stack."""
+        """Build the window layout and wire the signals of all child widgets.
+
+        Sidebar on the left; stick banner, top bar, action bar and the page stack
+        (grid, downloads, wheel) on the right.
+        """
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
@@ -217,7 +250,7 @@ class MainWindow(QMainWindow):
         return top_bar
 
     def _build_action_bar(self) -> QWidget:
-        """Build the selection counter and the batch action buttons."""
+        """Build the selection counter, select all/none and the batch action buttons."""
         bar = QWidget()
         bar.setObjectName("ActionBar")
         layout = QHBoxLayout(bar)
@@ -259,7 +292,11 @@ class MainWindow(QMainWindow):
 
     # --- Pages ---
     def _show_page(self, page: MediaType | str) -> None:
-        """Show the grid for a media type, or the DOWNLOADS or WHEEL page."""
+        """Show the grid for a media type, or the DOWNLOADS or WHEEL page.
+
+        Search, filters and the action bar are only shown for the grid. Switching
+        pages clears the grid selection.
+        """
         library_page = isinstance(page, MediaType)
         self.grid.reset_selection()
         self.sidebar.set_page(page)
@@ -287,7 +324,7 @@ class MainWindow(QMainWindow):
         return self.pages.currentWidget() is self.grid
 
     def _reveal_downloads(self) -> None:
-        """Switch to the queue page when a download still runs after a while."""
+        """Show the downloads page if a download still runs and the grid is shown."""
         if self._on_grid_page():
             self._show_page(DOWNLOADS)
 
@@ -301,7 +338,11 @@ class MainWindow(QMainWindow):
         self.lbl_loading.set_running(self.grid.is_loading and self._on_grid_page())
 
     def refresh_data(self, *_args: object) -> None:
-        """Rebuild the group filter and the cards of the current view."""
+        """Rebuild the group filter and the cards of the current view.
+
+        Keeps the chosen group when it still exists. Connected to every filter
+        change, so it accepts and ignores signal arguments.
+        """
         current_filter = self.combo_group.currentText()
         groups = [ALL_GROUPS, *self.db.get_all_groups()]
         self.combo_group.blockSignals(True)
@@ -326,7 +367,7 @@ class MainWindow(QMainWindow):
         self._sync_loading()
 
     def _update_action_bar(self) -> None:
-        """Update the selection counter and batch button states."""
+        """Update the selection counter and enable the batch buttons for a selection."""
         count = len(self.grid.selected)
         self.lbl_sel_count.setText(f"{count} ausgewählt" if count else "Keine Auswahl")
         for btn in (*self._batch_buttons, self.btn_sel_none):
@@ -336,7 +377,11 @@ class MainWindow(QMainWindow):
 
     # --- Configs and volumes ---
     def _load_config(self, db_path: str) -> None:
-        """Make the config with db_path active, reusing its open database."""
+        """Make the config with ``db_path`` active, reusing its open database.
+
+        Configs are reloaded from disk; a database opened for the first time is
+        loaded and load errors are reported once after the event loop runs.
+        """
         self.configs = load_configs()[0]
         self.config = next(
             (config for config in self.configs if config.db_path == db_path),
@@ -352,7 +397,12 @@ class MainWindow(QMainWindow):
         self._location = locate(self.config)
 
     def _activate_config(self, db_path: str) -> None:
-        """Switch to another config and reset all per-library state."""
+        """Switch to another config and reset all per-library state.
+
+        Abandons a running rule34 fetch for the old library, clears previews,
+        random history, ignored sync files and the search, then scans the folder
+        and shows the page that has entries.
+        """
         previous = self.db
         self._load_config(db_path)
         if self.db is not previous:
@@ -369,7 +419,10 @@ class MainWindow(QMainWindow):
         self.refresh_data()
 
     def _apply_config_ui(self) -> None:
-        """Fit the controls to the config and open a view that has entries."""
+        """Fit the controls to the config and open a page that has entries.
+
+        Shows the videos page only when the library has videos but no images.
+        """
         ai = self.config.is_ai
         self.sidebar.set_mode(ai, self.config.has_folder)
         self.sidebar.set_last_sync(self.config.folder_last_sync)
@@ -386,7 +439,7 @@ class MainWindow(QMainWindow):
         self._check_volumes()
 
     def _report_load_error(self, database: MediaDatabase) -> None:
-        """Tell the user once that a database could not be loaded."""
+        """Tell the user once that a database failed to load and where its backup is."""
         if not database.load_error:
             return
         lines = [
@@ -407,7 +460,12 @@ class MainWindow(QMainWindow):
         return locate(self.config)
 
     def _check_volumes(self) -> None:
-        """Keep location, window title, sidebar and stick banner in sync."""
+        """Keep location, window title, sidebar and stick banner in sync.
+
+        Runs every 4 s. When the config's stick was plugged in or pulled, failed
+        previews are retried, the folder is scanned and the grid refreshed. Also
+        offers unassigned vault sticks in the banner.
+        """
         location = self._locate()
         changed = location.volume != self._location.volume
         self._location = location
@@ -445,11 +503,11 @@ class MainWindow(QMainWindow):
         return True
 
     def auto_scan_folder(self) -> None:
-        """Index the config folder unless the config is in AI mode.
+        """Index new files of the config folder, except in AI mode.
 
         AI mode extracts metadata from every file, so it only syncs when the
         user asks for it. An unplugged volume simply yields no new entries:
-        the DB already holds the references from the first run.
+        the database already holds the references from the first run.
         """
         if not self.config.is_ai:
             library.scan(self.db, self.config.mode, self._locate())
@@ -465,7 +523,11 @@ class MainWindow(QMainWindow):
             self.refresh_data()
 
     def _open_stick(self) -> None:
-        """Open the stick dialog and activate the config it produced."""
+        """Open the stick dialog and activate the config it produced.
+
+        When the active config was moved onto a stick, its stored paths are made
+        relative to the stick first.
+        """
         self.db.save()
         dlg = StickDialog(self, self.configs, self.config)
         if dlg.exec() and dlg.target_db_path:
@@ -476,7 +538,7 @@ class MainWindow(QMainWindow):
             self._activate_config(dlg.target_db_path)
 
     def _switch_config(self) -> None:
-        """Save the current database and open another vault config."""
+        """Save the current database and open the config dialog; activate its choice."""
         self.db.save()
         dlg = ConfigDialog(self, self.configs, self.config.db_path)
         if not dlg.exec():
@@ -493,19 +555,26 @@ class MainWindow(QMainWindow):
 
     # --- rule34 ---
     def _fetch_rule34(self) -> None:
-        """Start a rule34 import into the active library."""
+        """Start a rule34 import into the active library, if its stick is connected."""
         if self._library_ready():
             self.rule34.start(self.config, self.configs, self.db, self._locate())
 
     def _on_download_finished(self, job: DownloadJob) -> None:
-        """Store post IDs after a clean run and refresh the visible grid."""
+        """Store post IDs after a clean run and refresh the visible grid.
+
+        The grid only refreshes when the job imported into the active library.
+        """
         remember_newest_ids(job, self.configs, self.config.db_path)
         if job.imported and job.db is self.db:
             self.refresh_data()
 
     # --- Window events ---
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Keep the window open while background work could lose data."""
+        """Keep the window open while background work could lose data.
+
+        Refuses to close during a download or post fetch, and when the preview
+        worker does not finish within 3 s (a broken video can block OpenCV).
+        """
         if self.downloads_page.is_busy or self.rule34.is_busy:
             QMessageBox.information(
                 self,
@@ -534,7 +603,11 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keyboard shortcuts for selection, deletion and search."""
+        """Handle grid shortcuts: Ctrl+A, Ctrl+F, Esc and Delete.
+
+        Only active while the grid page is shown, so they never act on hidden
+        cards behind another page.
+        """
         # Grid shortcuts must not act on hidden cards behind another page.
         if not self._on_grid_page():
             super().keyPressEvent(event)
@@ -554,7 +627,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _schedule_search_refresh(self, _text: str | None = None) -> None:
-        """Debounce the grid rebuild while the user is typing."""
+        """Debounce the grid rebuild by 200 ms while the user types."""
         if self.inp_search.text():
             self._search_timer.start()
         else:
@@ -567,7 +640,10 @@ class MainWindow(QMainWindow):
 
     # --- Entries ---
     def _open_detail(self, entry: MediaItem) -> None:
-        """Open the detail dialog and remember the entry as a recent pick."""
+        """Open the detail dialog and remember the entry as a recent pick.
+
+        Opens the edit dialog afterwards when the user asked for it.
+        """
         self.recent_picks = [e for e in self.recent_picks if e is not entry]
         self.recent_picks = [*self.recent_picks, entry][-RECENT_PICKS:]
         dlg = DetailDialog(
@@ -580,7 +656,7 @@ class MainWindow(QMainWindow):
             self.refresh_data()
 
     def _open_edit(self, entry: MediaItem) -> None:
-        """Open the edit dialog and reload the view after saving."""
+        """Open the edit dialog; on save, persist, drop the old preview and refresh."""
         dlg = EditDialog(
             self, self.db, entry.entry_type, entry, root=self._locate().volume
         )
@@ -590,7 +666,11 @@ class MainWindow(QMainWindow):
             self.refresh_data()
 
     def _create_new(self) -> None:
-        """Ask for a media type and single or batch creation, then run it."""
+        """Ask what to create and run it.
+
+        Offers single and batch creation per media type; AI configs only offer
+        images.
+        """
         types = (MediaType.IMAGE,) if self.config.is_ai else tuple(MediaType)
         options: dict[str, Callable[[], None]] = {}
         for media_type in types:
@@ -608,9 +688,13 @@ class MainWindow(QMainWindow):
             options[choice]()
 
     def _copy_into_library(self, path: str) -> str | None:
-        """Copy one accepted file into the config folder; None on failure.
+        """Copy one accepted file into the config folder.
 
         Configs without a managed folder keep files where they are.
+
+        Returns:
+            The stored path (the copy, or the original path), or None when the
+            copy failed or the same content is already in the database.
         """
         target = self._locate().folder
         if not target:
@@ -622,7 +706,12 @@ class MainWindow(QMainWindow):
         return result.copied[0] if result.copied else None
 
     def _create_single(self, media_type: MediaType) -> None:
-        """Pick a file, check it, copy it into the library and edit the entry."""
+        """Pick a file, check it, copy it into the library and edit the new entry.
+
+        AI configs require AI metadata; duplicates are rejected. The file is only
+        copied once every check passed, and the copy is removed again if the user
+        cancels the edit dialog.
+        """
         path, _ = file_dialogs.pick_file(
             self, "Datei auswählen", library.file_filter(media_type)
         )
@@ -668,7 +757,11 @@ class MainWindow(QMainWindow):
                 logger.warning("Kopie nicht entfernbar: %s", stored, exc_info=True)
 
     def _batch_import(self, media_type: MediaType) -> None:
-        """Import several files as entries, skipping duplicates."""
+        """Import several files as entries, skipping duplicates.
+
+        New entries get the group selected in the filter and are copied into the
+        config folder. A summary is shown when files were skipped.
+        """
         paths, _ = file_dialogs.pick_files(
             self, "Importieren", library.file_filter(media_type)
         )
@@ -697,7 +790,10 @@ class MainWindow(QMainWindow):
             )
 
     def _batch_delete(self) -> None:
-        """Delete all selected entries after confirmation."""
+        """Delete all selected entries after confirmation.
+
+        Only database entries are removed; the files stay on disk.
+        """
         doomed = set(self.grid.selected)
         answer = QMessageBox.question(self, "Löschen", f"{len(doomed)} löschen?")
         if answer != QMessageBox.StandardButton.Yes:
@@ -710,7 +806,7 @@ class MainWindow(QMainWindow):
         self._finish_batch()
 
     def _batch_score(self) -> None:
-        """Set the score of all selected entries to a new value."""
+        """Set the score of all selected entries to a value the user enters."""
         score, ok = QInputDialog.getInt(
             self, "Score", "Neuer Score (1-100):", 50, 1, 100
         )
@@ -721,7 +817,7 @@ class MainWindow(QMainWindow):
             self._finish_batch()
 
     def _batch_group(self) -> None:
-        """Assign a new group to all selected entries."""
+        """Assign an existing or newly typed group to all selected entries."""
         group, ok = QInputDialog.getItem(
             self,
             "Gruppe",
@@ -737,13 +833,21 @@ class MainWindow(QMainWindow):
             self._finish_batch()
 
     def _finish_batch(self) -> None:
-        """Clear the selection and show the result of a batch action."""
+        """Clear the selection and refresh the grid after a batch action."""
         self.grid.clear_selection()
         self.refresh_data()
 
     # --- Random picks ---
     def _pick_and_open(self, pool: list[MediaItem], smart: bool) -> None:
-        """Open a random entry whose file is readable, retrying a few times."""
+        """Open a random entry whose file is readable.
+
+        Tries up to five picks, so a few missing files do not end in nothing; gives
+        up silently after that.
+
+        Args:
+            pool: Candidate entries.
+            smart: True for the weighted pick (:meth:`MediaDatabase.get_random`).
+        """
         root = self._locate().volume
         for _attempt in range(5):
             chosen = self.db.get_random(pool, smart, self.recent_picks)
@@ -755,7 +859,7 @@ class MainWindow(QMainWindow):
                 return
 
     def _do_random(self, smart: bool, global_pool: bool) -> None:
-        """Pick a random entry (local or global) and open it."""
+        """Pick a random entry from the current view or the library and open it."""
         if self._library_ready():
             pool = (
                 self.db.snapshot()
@@ -765,7 +869,7 @@ class MainWindow(QMainWindow):
             self._pick_and_open(pool, smart)
 
     def _open_group_random(self) -> None:
-        """Open the group random dialog and show the chosen entry."""
+        """Let the user choose groups and types, then open a random entry from them."""
         dlg = GroupRandomDialog(self, self.db)
         if dlg.exec() and dlg.result_pool:
             self._pick_and_open(dlg.result_pool, dlg.smart)

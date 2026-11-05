@@ -1,4 +1,9 @@
-"""Named entry lists ("configs") of the wheel of fortune, stored as JSON."""
+"""Named entry lists ("configs") of the wheel of fortune, stored as JSON.
+
+The file ``~/.mediavault/wheel_configs.json`` maps a config name to its list
+of wheel entries. Reading drops anything malformed; saving is atomic and
+moves an unparsable file aside instead of overwriting it.
+"""
 
 import json
 import logging
@@ -14,7 +19,7 @@ WHEEL_CONFIGS_PATH = os.path.join(APP_DIR, "wheel_configs.json")
 
 
 def _clean(data: Any) -> dict[str, list[str]]:
-    """Keep only named configs whose entries are non-empty strings."""
+    """Keep only named configs whose entries are non-empty strings, all stripped."""
     if not isinstance(data, Mapping):
         return {}
     result: dict[str, list[str]] = {}
@@ -29,7 +34,11 @@ def _clean(data: Any) -> dict[str, list[str]]:
 
 
 def load_wheel_configs(path: str = WHEEL_CONFIGS_PATH) -> dict[str, list[str]]:
-    """Load the saved configs; a missing or unreadable file yields none."""
+    """Load the saved configs.
+
+    Returns:
+        ``{name: entries}``; empty when the file is missing or unreadable.
+    """
     try:
         with open(path, encoding="utf-8") as f:
             return _clean(json.load(f))
@@ -47,6 +56,9 @@ def save_wheel_configs(
 
     A file that cannot be parsed is moved to ``<path>.corrupt`` first instead
     of being silently overwritten.
+
+    Raises:
+        OSError: When the file cannot be written.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     if os.path.exists(path):
@@ -62,5 +74,5 @@ def save_wheel_configs(
 
 
 def matching_config(configs: Mapping[str, list[str]], entries: list[str]) -> str | None:
-    """Return the name of a config with exactly these entries, if any."""
+    """Return the name of a config with exactly these entries in this order, if any."""
     return next((name for name, saved in configs.items() if saved == entries), None)

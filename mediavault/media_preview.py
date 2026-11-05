@@ -1,7 +1,12 @@
-"""Preview frames for videos, safe to call outside the GUI thread.
+"""Preview sources for videos, safe to call outside the GUI thread.
 
-Only QImage is used from Qt, so workers may call these freely; callers turn
-the image into a QPixmap on the GUI thread.
+:mod:`mediavault.gui.thumbnails` tries two sources in order: a frame
+extracted with OpenCV and, as fallback, a thumbnail the desktop environment
+already cached (Linux freedesktop thumbnail spec). OpenCV is optional;
+without it :data:`HAS_CV2` is False and only system thumbnails are used.
+
+Only ``QImage`` is used from Qt, so workers may call these freely; callers
+turn the image into a ``QPixmap`` on the GUI thread.
 """
 
 import hashlib
@@ -23,7 +28,15 @@ except ImportError:
 
 
 def get_os_thumbnail(video_path: str) -> str:
-    """Return a system-cached thumbnail for a video (Linux only)."""
+    """Return a system-cached thumbnail for a video (Linux only).
+
+    Looks up ``~/.cache/thumbnails/{large,normal}/<md5 of file URI>.png`` as
+    defined by the freedesktop thumbnail specification.
+
+    Returns:
+        The thumbnail path, or an empty string on other platforms or when the
+        desktop has not created one.
+    """
     if sys.platform != "linux" or not video_path:
         return ""
     try:
@@ -45,8 +58,12 @@ def get_os_thumbnail(video_path: str) -> str:
 def get_video_frame_image(video_path: str) -> QImage | None:
     """Extract a video frame as a QImage via OpenCV.
 
-    QImage may be created in a worker thread; callers convert it to a
-    QPixmap in the GUI thread.
+    Takes frame 60 (about two seconds in, past black intros) and falls back to
+    the first frame for very short videos.
+
+    Returns:
+        A detached RGB image, or None without OpenCV or when the video cannot
+        be decoded.
     """
     if not HAS_CV2 or not video_path:
         return None

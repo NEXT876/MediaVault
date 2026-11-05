@@ -1,4 +1,12 @@
-"""Dialogs for the rule34 import: settings, tag help and post preview."""
+"""Dialogs for the rule34 import: settings with tag help, and post preview.
+
+:class:`Rule34Dialog` edits the rule34 settings of the active config:
+credentials (a pasted URL or ``&api_key=…&user_id=…`` string is split
+automatically), one tag search per line with live tag autocompletion, named
+tag presets, post count, video-only filter and a "fetch again" reset.
+:class:`Rule34PreviewDialog` shows the fetched posts as a thumbnail grid
+with checkboxes; all posts start checked.
+"""
 
 import urllib.parse
 
@@ -31,12 +39,24 @@ from mediavault.rule34 import Post, fetch_tag_suggestions, split_queries, tag_at
 
 
 class Rule34Dialog(QDialog):
-    """Collect rule34 credentials and search settings for the active config."""
+    """Collect rule34 credentials and search settings for the active config.
+
+    Values are only written to the config by :meth:`store_settings` after the
+    dialog was accepted; tag presets are saved immediately when the user
+    stores or deletes one. Tag suggestions are fetched in a background worker,
+    debounced by 350 ms, for the word under the cursor.
+    """
 
     def __init__(
         self, parent: QWidget | None, config: VaultConfig, configs: list[VaultConfig]
     ) -> None:
-        """Initialize the form from the config's saved values."""
+        """Initialize the form from the config's saved values.
+
+        Args:
+            parent: Parent window.
+            config: Active config whose rule34 settings are edited.
+            configs: All configs, needed to save presets and settings.
+        """
         super().__init__(parent)
         self.setWindowTitle("rule34.xxx Import")
         self.setMinimumWidth(480)
@@ -150,11 +170,16 @@ class Rule34Dialog(QDialog):
             self.inp_user.setText(values["user_id"][0])
 
     def _schedule_suggestions(self) -> None:
-        """Restart the debounce timer for tag suggestions."""
+        """Restart the tag suggestion debounce timer after typing or cursor moves."""
         self._suggest_timer.start()
 
     def _request_suggestions(self) -> None:
-        """Ask rule34 for tags matching the word at the cursor."""
+        """Ask rule34 for tags matching the word at the cursor.
+
+        Only one request runs at a time; a request during a running one is
+        remembered and sent when the first one finished. Words shorter than two
+        characters and meta tags with ``:`` hide the list instead.
+        """
         if self._suggest_worker is not None:
             self._suggest_pending = True
             return
@@ -171,7 +196,7 @@ class Rule34Dialog(QDialog):
         self._suggest_worker.start()
 
     def _on_suggestions(self) -> None:
-        """Show suggestions if the requested word is still current."""
+        """Show the suggestions if the requested word is still unchanged in the text."""
         worker = self._suggest_worker
         self._suggest_worker = None
         if worker is not None:
@@ -197,7 +222,7 @@ class Rule34Dialog(QDialog):
         self.lst_tags.setVisible(False)
 
     def _apply_suggestion(self, item: QListWidgetItem) -> None:
-        """Replace the current word with the clicked suggestion."""
+        """Replace the word at the cursor with the clicked suggestion plus a space."""
         start, end = self._suggest_range
         if self.inp_tags.toPlainText()[start:end] != self._suggest_word:
             self._hide_suggestions()
@@ -212,7 +237,7 @@ class Rule34Dialog(QDialog):
         self._hide_suggestions()
 
     def _refresh_saved_tags(self, selected: str | None = None) -> None:
-        """Rebuild the preset list and optionally select one entry."""
+        """Rebuild the preset list and optionally select one entry by name."""
         self.combo_saved_tags.clear()
         self.combo_saved_tags.addItem("Gespeicherte Tag-Configs …", "")
         for name in sorted(self.config.rule34.saved_tags, key=str.casefold):
@@ -229,7 +254,11 @@ class Rule34Dialog(QDialog):
             self.inp_tags.setPlainText(self.config.rule34.saved_tags[name])
 
     def _save_saved_tags(self) -> None:
-        """Store the current tag text under a name the user chooses."""
+        """Store the current tag text under a name the user chooses.
+
+        An existing name is overwritten, which is how a preset gets updated. The
+        configs file is saved right away.
+        """
         text = "\n".join(split_queries(self.inp_tags.toPlainText()))
         if not text:
             QMessageBox.warning(self, "Fehler", "Mindestens ein Tag ist erforderlich.")
@@ -247,7 +276,7 @@ class Rule34Dialog(QDialog):
         self._refresh_saved_tags(name)
 
     def _delete_saved_tags(self) -> None:
-        """Remove the selected preset after confirmation."""
+        """Remove the selected preset after confirmation and save the configs."""
         name = self.combo_saved_tags.currentData()
         if not name:
             return
@@ -261,7 +290,7 @@ class Rule34Dialog(QDialog):
         self._refresh_saved_tags()
 
     def done(self, result: int) -> None:
-        """Stop the suggestion timer and worker before the dialog closes."""
+        """Stop the suggestion timer and wait for a running worker before closing."""
         self._suggest_timer.stop()
         worker = self._suggest_worker
         self._suggest_worker = None
@@ -271,7 +300,7 @@ class Rule34Dialog(QDialog):
         super().done(result)
 
     def _accept(self) -> None:
-        """Validate the required fields before closing."""
+        """Close the dialog only when key, user ID and at least one search are given."""
         if not self.inp_key.text().strip():
             QMessageBox.warning(self, "Fehler", "API-Key ist erforderlich.")
             return
@@ -284,7 +313,10 @@ class Rule34Dialog(QDialog):
         self.accept()
 
     def store_settings(self) -> None:
-        """Write the entered values into the config and persist all configs."""
+        """Write the entered values into the config and persist all configs.
+
+        Tag lines are normalized and deduplicated (:func:`rule34.split_queries`).
+        """
         settings = self.config.rule34
         settings.api_key = self.inp_key.text().strip()
         settings.user_id = self.inp_user.text().strip()
@@ -294,15 +326,20 @@ class Rule34Dialog(QDialog):
         save_configs(self.configs, self.config.db_path)
 
     def last_ids(self) -> dict[str, int]:
-        """Return the stored post IDs, or none when the user asked for a reset.
+        """Return the stored newest post IDs per search, or none on a reset.
 
-        The import still skips files that are already stored locally.
+        With "Cache zurücksetzen" checked the newest posts are fetched again; the
+        import still skips files that are already stored locally.
         """
         return {} if self.chk_reset.isChecked() else self.config.rule34.last_ids
 
 
 class Rule34PreviewDialog(QDialog):
-    """Show fetched posts and let the user pick which ones to download."""
+    """Show fetched posts and let the user pick which ones to download.
+
+    Each post is a 160 px thumbnail (or "keine Vorschau") with a checkbox
+    labelled with its ID; the tooltip shows the search it was found with.
+    """
 
     COLUMNS = 4
     THUMB = 160
@@ -313,7 +350,13 @@ class Rule34PreviewDialog(QDialog):
         posts: list[Post],
         previews: dict[int, bytes],
     ) -> None:
-        """Initialize the preview grid from fetched posts and thumbnails."""
+        """Initialize the preview grid from fetched posts and thumbnails.
+
+        Args:
+            parent: Parent window.
+            posts: Fetched posts, newest first.
+            previews: Thumbnail bytes by post ID; missing posts show a placeholder.
+        """
         super().__init__(parent)
         self.setWindowTitle("rule34.xxx – Posts auswählen")
         self.resize(900, 700)
@@ -359,7 +402,7 @@ class Rule34PreviewDialog(QDialog):
         layout.addLayout(buttons)
 
     def _item(self, post: Post, data: bytes | None) -> QWidget:
-        """Build one thumbnail with its selection checkbox."""
+        """Build one thumbnail with its selection checkbox, checked by default."""
         label = QLabel()
         label.setFixedSize(self.THUMB, self.THUMB)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
