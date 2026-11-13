@@ -82,3 +82,44 @@ def test_unreadable_file_is_never_overwritten(tmp_path, monkeypatch):
     assert db.read_only and db.load_error
     db.add(MediaItem("B"))
     assert json.loads(path.read_text(encoding="utf-8")) == [{"title": "A"}]
+
+
+def test_entry_without_title_is_treated_as_corrupt(tmp_path):
+    path = tmp_path / "m.json"
+    path.write_text('[{"score": 5}]', encoding="utf-8")
+    db = MediaDatabase(str(path))
+
+    db.load()
+
+    assert db.entries == []
+    assert db.load_error
+    assert db.backup_path and os.path.exists(db.backup_path)
+
+
+def test_failed_backup_never_overwrites_corrupt_file(tmp_path, monkeypatch):
+    path = tmp_path / "m.json"
+    path.write_text("{kaputt", encoding="utf-8")
+    db = MediaDatabase(str(path))
+
+    def failing_copy(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("mediavault.database.shutil.copy", failing_copy)
+    db.load()
+
+    assert db.read_only and not db.backup_path
+    db.add(MediaItem("B"))
+    assert path.read_text(encoding="utf-8") == "{kaputt"
+
+
+def test_numbers_stored_as_text_are_converted(tmp_path):
+    path = tmp_path / "m.json"
+    path.write_text(
+        '[{"title": "A", "score": "80", "last_watched": "1.5"}]', encoding="utf-8"
+    )
+    db = MediaDatabase(str(path))
+
+    db.load()
+
+    assert (db.entries[0].score, db.entries[0].last_watched) == (80, 1.5)
+    assert db.get_random(db.entries, smart=True) is db.entries[0]

@@ -21,6 +21,7 @@ from dataclasses import asdict, fields
 from typing import Any
 
 from mediavault import volumes
+from mediavault.jsonio import write_json_atomic
 from mediavault.models import MODE_AI, MODE_NORMAL, LibraryRoot, VaultConfig
 
 logger = logging.getLogger(__name__)
@@ -160,16 +161,8 @@ def save_configs(
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     data = {"last": last, "configs": [_stored(config) for config in configs]}
-    tmp_path = f"{path}.tmp"
     # The file holds API credentials: keep it private to the user.
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        logger.debug("Could not set permissions: %s", tmp_path, exc_info=True)
-    os.replace(tmp_path, path)
+    write_json_atomic(path, data, private=True)
 
 
 def _slug(name: str) -> str:

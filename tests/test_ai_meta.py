@@ -231,3 +231,11 @@ def test_ai_duplicate_key_keeps_seed_zero():
 
     assert key is not None
     assert key != ai_duplicate_key({"prompt": "castle", "seed": 1})
+
+
+def test_malformed_workflow_is_not_ai_metadata(tmp_path):
+    path = tmp_path / "odd.png"
+    workflow = {"1": {"class_type": "KSampler", "inputs": None}}
+    _write_png(path, [_text_chunk("prompt", json.dumps(workflow))])
+
+    assert extract_ai_metadata(str(path)) is None

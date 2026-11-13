@@ -90,9 +90,23 @@ class MediaItem:
 
         Unknown keys are dropped so files written by newer versions still load;
         missing keys take the dataclass defaults so older files load too.
+        Numbers stored as text (``"80"``) are converted.
+
+        Raises:
+            TypeError: When ``title`` is missing.
+            ValueError: When a number field holds something that is not a number.
         """
         known = {key: value for key, value in data.items() if key in _ITEM_FIELDS}
+        for key, convert in _NUMBER_FIELDS.items():
+            if key in known:
+                known[key] = convert(known[key])
         return cls(**known)
 
 
 _ITEM_FIELDS = frozenset(field.name for field in fields(MediaItem))
+_NUMBER_FIELDS = {
+    "score": int,
+    "watched_counter": int,
+    "rating_count": int,
+    "last_watched": float,
+}
