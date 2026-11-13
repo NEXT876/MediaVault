@@ -1,19 +1,15 @@
 name: CI
 
-# Only the release path runs CI: the develop -> main pull request, and the
-# squash commit that lands on main (it also publishes the coverage badge).
+# CI runs on every pull request, never on plain pushes. The release pull
+# request (develop -> main) also publishes the coverage badge.
 on:
   pull_request:
-    branches: [main]
-  push:
-    branches: [main]
 
 jobs:
   test:
-    if: github.event_name == 'push' || github.head_ref == 'develop'
     runs-on: ubuntu-latest
     permissions:
-      # Write access is only used by the coverage badge step on pushes to main.
+      # Write access is only used by the coverage badge step on PRs into main.
       contents: write
     env:
       QT_QPA_PLATFORM: offscreen
@@ -45,7 +41,7 @@ jobs:
       - name: Tests
         run: pytest -q --cov=mediavault
       - name: Coverage-Badge
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.base_ref == 'main'
         run: |
           pct=$(coverage report --format=total)
           dir="$RUNNER_TEMP/badges"
