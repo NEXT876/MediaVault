@@ -22,9 +22,10 @@ import shutil
 import threading
 import time
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 
 from mediavault import volumes
+from mediavault.jsonio import write_json_atomic
 from mediavault.models import MediaItem
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,8 @@ class MediaDatabase:
         A missing file leaves the database empty. An unreadable file sets
         ``load_error`` and ``read_only``. A corrupt file or one with an unexpected
         shape is copied to ``<file>.corrupt.<timestamp>`` (``backup_path``) and the
-        database starts empty; the GUI reports both cases to the user.
+        database starts empty; if that copy fails, the database is read-only
+        instead. The GUI reports all cases to the user.
         """
         with self._lock:
             self.load_error = ""
@@ -98,12 +100,18 @@ class MediaDatabase:
                 logger.error("Database not readable: %s", self.filepath)
                 self.load_error = f"Datei nicht lesbar: {exc}"
                 self.read_only = True
-            except (json.JSONDecodeError, ValueError):
+            except (ValueError, TypeError):
+                # JSONDecodeError is a ValueError; TypeError comes from from_dict.
                 logger.error("Corrupt JSON: %s", self.filepath)
                 self.load_error = "Datei beschädigt"
                 backup = f"{self.filepath}.corrupt.{int(time.time())}"
-                with suppress(OSError):
+                try:
                     shutil.copy(self.filepath, backup)
+                except OSError:
+                    # Without a backup the next save would destroy the only copy.
+                    logger.error("Backup failed, saving disabled: %s", self.filepath)
+                    self.read_only = True
+                else:
                     self.backup_path = backup
                     logger.info("Backup created: %s", backup)
 
@@ -144,15 +152,9 @@ class MediaDatabase:
                 return
             parent = os.path.dirname(os.path.abspath(self.filepath))
             os.makedirs(parent, exist_ok=True)
-            tmp = self.filepath + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(
-                    [e.to_dict() for e in self.entries],
-                    f,
-                    indent=4,
-                    ensure_ascii=False,
-                )
-            os.replace(tmp, self.filepath)
+            write_json_atomic(
+                self.filepath, [e.to_dict() for e in self.entries], indent=4
+            )
 
     def add(self, entry: MediaItem) -> None:
         """Append one entry and persist the database."""

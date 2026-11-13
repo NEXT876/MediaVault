@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from mediavault.config import APP_DIR
+from mediavault.jsonio import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +68,7 @@ def save_wheel_configs(
                 json.load(f)
         except (OSError, ValueError):
             os.replace(path, f"{path}.corrupt")
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(_clean(configs), f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, path)
+    write_json_atomic(path, _clean(configs))
 
 
 def matching_config(configs: Mapping[str, list[str]], entries: list[str]) -> str | None:

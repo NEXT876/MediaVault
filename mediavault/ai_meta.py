@@ -226,7 +226,12 @@ def extract_ai_metadata(path: str) -> dict[str, Any] | None:
         except ValueError:
             data = None
         if isinstance(data, dict):
-            meta = _parse_comfyui(data)
+            try:
+                meta = _parse_comfyui(data)
+            except (AttributeError, TypeError, RecursionError):
+                # The parser trusts the workflow's shape; files from the web may not.
+                logger.warning("Unexpected workflow format: %s", path)
+                return None
             if meta.get("prompt") or meta.get("model"):
                 return meta
     return None

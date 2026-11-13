@@ -20,6 +20,7 @@ import os
 import uuid
 from collections.abc import Iterable
 
+from mediavault.jsonio import write_json_atomic
 from mediavault.models import VolumeInfo
 
 logger = logging.getLogger(__name__)
@@ -89,12 +90,8 @@ def write_marker(root: str, volume_uuid: str = "", label: str = "") -> VolumeInf
         OSError: When the volume is not writable.
     """
     info = VolumeInfo(volume_uuid or new_uuid(), label)
-    target = marker_path(root)
-    tmp = f"{target}.{os.getpid()}.tmp"
     payload = {"version": MARKER_VERSION, "uuid": info.uuid, "label": info.label}
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, target)
+    write_json_atomic(marker_path(root), payload)
     return info
 
 

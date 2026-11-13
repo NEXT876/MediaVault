@@ -68,6 +68,10 @@
   Schnellbewertung, Backups von media_data.json, Tags statt Gruppen.
 - Specs und Pläne (`docs/superpowers/specs/`, `docs/superpowers/plans/`) löschen,
   sobald sie fertig umgesetzt sind, im selben Branch wie die Umsetzung.
+- Branch-Namen immer nach der Git-Workflow-Regel oben (`fix/…`, `feature/…` …),
+  auch in Cloud-Sessions, die einen `claude/…`-Branch vorgeben.
+- Das Repo heißt auf GitHub `NEXT876/Mediavault` (kleines v), Remote:
+  `https://github.com/NEXT876/Mediavault.git`.
 - Neue Notizen hier eintragen, wenn Ben sagt „merk dir …".
 - Modelle und Subagents: Planung, Architektur und Reviews selbst machen (Opus).
   Routinearbeit nach einem fertigen Plan nur dann an Subagents mit

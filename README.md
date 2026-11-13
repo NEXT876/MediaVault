@@ -4,9 +4,9 @@
 
 **A place to collect the images that matter to you, rate them, and keep rediscovering them.**
 
-[![CI](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/NEXT876/MediaVault/badges/coverage.json)](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/NEXT876/MediaVault?include_prereleases&sort=semver)](https://github.com/NEXT876/MediaVault/releases)
+[![CI](https://github.com/NEXT876/Mediavault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NEXT876/Mediavault/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/NEXT876/Mediavault/badges/coverage.json)](https://github.com/NEXT876/Mediavault/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/NEXT876/Mediavault?include_prereleases&sort=semver)](https://github.com/NEXT876/Mediavault/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -88,7 +88,7 @@ grid into a shortlist.
 ### Windows
 
 A standalone `.exe` that needs no Python will be attached to the
-[releases](https://github.com/NEXT876/MediaVault/releases). Until the first
+[releases](https://github.com/NEXT876/Mediavault/releases). Until the first
 release, install from source as described below.
 
 ### From source
@@ -96,7 +96,7 @@ release, install from source as described below.
 Requires Python 3.10 or newer.
 
 ```bash
-git clone https://github.com/NEXT876/MediaVault.git
+git clone https://github.com/NEXT876/Mediavault.git
 ```
 
 ```bash
