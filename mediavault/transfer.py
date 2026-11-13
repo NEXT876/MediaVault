@@ -55,7 +55,7 @@ def copy_into_folder(
     try:
         os.makedirs(folder, exist_ok=True)
     except OSError:
-        logger.warning("Zielordner nicht anlegbar: %s", folder, exc_info=True)
+        logger.warning("Could not create target folder: %s", folder, exc_info=True)
         result.failed.extend(paths)
         return result
 
@@ -75,7 +75,7 @@ def copy_into_folder(
         try:
             shutil.copy2(path, destination)
         except OSError:
-            logger.warning("Kopieren fehlgeschlagen: %s", path, exc_info=True)
+            logger.warning("Copy failed: %s", path, exc_info=True)
             result.failed.append(path)
             continue
         known.add(digest)

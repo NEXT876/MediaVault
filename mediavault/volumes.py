@@ -38,7 +38,7 @@ def mounted_roots() -> list[str]:
     try:
         from PyQt6.QtCore import QStorageInfo
     except ImportError:  # pragma: no cover - PyQt6 is a hard dependency
-        logger.debug("QStorageInfo nicht verfuegbar", exc_info=True)
+        logger.debug("QStorageInfo not available", exc_info=True)
         return []
     roots = (v.rootPath() for v in QStorageInfo.mountedVolumes() if v.isValid())
     return [root for root in dict.fromkeys(roots) if root]

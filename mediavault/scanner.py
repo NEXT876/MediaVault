@@ -45,7 +45,7 @@ def find_new_media(
         logged warning) when the folder does not exist.
     """
     if not os.path.isdir(folder):
-        logger.warning("Ordner nicht gefunden: %s", folder)
+        logger.warning("Folder not found: %s", folder)
         return [], []
     known = {volumes.path_key(path, root) for path in known_paths if path}
     images_ext = {extension.casefold() for extension in image_exts}

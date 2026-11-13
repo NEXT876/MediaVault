@@ -323,7 +323,7 @@ class CardGrid(QScrollArea):
             return
         worker.deleteLater()
         if worker.error is not None:
-            logger.debug("Vorschaubilder nicht geladen", exc_info=worker.error)
+            logger.debug("Previews not loaded", exc_info=worker.error)
         elif self._thumb_library != (self._root, self._scope):
             # Loaded for another library: the same relative path is another file.
             self._start_thumbnail_load()

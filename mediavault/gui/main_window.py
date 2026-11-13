@@ -397,7 +397,7 @@ class MainWindow(QMainWindow):
             try:
                 save_configs(self.configs, self.config.db_path)
             except OSError:
-                logger.warning("Migrierte Plugin-Einstellungen nicht gespeichert")
+                logger.warning("Migrated plugin settings not saved")
         db = self._databases.get(self.config.db_path)
         if db is None:
             db = MediaDatabase(self.config.db_path)
@@ -768,7 +768,7 @@ class MainWindow(QMainWindow):
             try:
                 os.remove(stored)
             except OSError:
-                logger.warning("Kopie nicht entfernbar: %s", stored, exc_info=True)
+                logger.warning("Could not remove copy: %s", stored, exc_info=True)
 
     def _batch_import(self, media_type: MediaType) -> None:
         """Import several files as entries, skipping duplicates.

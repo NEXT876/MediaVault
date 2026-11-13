@@ -78,7 +78,7 @@ def build_entry(
     if mode == MODE_AI:
         meta = extract_ai_metadata(path) or {}
         if not meta:
-            logger.info("Kein KI-Bild, übersprungen: %s", path)
+            logger.info("Not an AI image, skipped: %s", path)
             return None
     entry = MediaItem(
         os.path.splitext(os.path.basename(path))[0],
