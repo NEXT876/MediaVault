@@ -59,11 +59,10 @@
 - Sprache: Antworten auf Deutsch. GitHub-Issues und PRs (Titel und Text) auf Englisch.
 - Tech-Debt-Backlog (Audit 2026-11-10), nach Priorität:
   1. CI-Matrix (Python 3.10/3.13, Windows)
-  2. Atomares JSON-Speichern 4× dupliziert, ohne fsync (Datenverlust-Risiko auf Stick/rclone)
-  3. Obergrenzen für PyQt6/opencv
-  4. GUI-Riesendateien (dialogs.py, wheel.py, main_window.py)
-  5. GUI-Tests fehlen
-  6. MediaDatabase schreibt bei jeder Änderung alles neu (erst bei großen Bibliotheken relevant)
+  2. Obergrenzen für PyQt6/opencv
+  3. GUI-Riesendateien (dialogs.py, wheel.py, main_window.py)
+  4. GUI-Tests fehlen
+  5. MediaDatabase schreibt bei jeder Änderung alles neu (erst bei großen Bibliotheken relevant)
 - Offene Feature-Ideen: Duell-Modus (Elo), fehlende Dateien finden, Diashow mit
   Schnellbewertung, Backups von media_data.json, Tags statt Gruppen.
 - Specs und Pläne (`docs/superpowers/specs/`, `docs/superpowers/plans/`) löschen,
