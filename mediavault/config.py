@@ -123,13 +123,13 @@ def load_configs(path: str = CONFIGS_PATH) -> tuple[list[VaultConfig], str]:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            logger.warning("Configs konnten nicht gelesen werden: %s", path)
+            logger.warning("Could not read configs: %s", path)
 
     items = data.get("configs", []) if isinstance(data, dict) else []
     if not isinstance(items, list) or not all(
         isinstance(item, dict) for item in items
     ):
-        logger.warning("Configs haben ein unerwartetes Format: %s", path)
+        logger.warning("Configs have an unexpected format: %s", path)
         items = []
     configs = [config_from_dict(item) for item in items]
     if not configs:
@@ -168,7 +168,7 @@ def save_configs(
     try:
         os.chmod(tmp_path, 0o600)
     except OSError:
-        logger.debug("Rechte nicht setzbar: %s", tmp_path, exc_info=True)
+        logger.debug("Could not set permissions: %s", tmp_path, exc_info=True)
     os.replace(tmp_path, path)
 
 

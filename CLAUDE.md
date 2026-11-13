@@ -5,9 +5,12 @@
 - **Commits:** Author ist Ben Waibel, Claude ist Co-Author.
   - Committen mit `--author "Ben Waibel <103282803+NEXT876@users.noreply.github.com>"`.
   - Die Commit-Message endet mit dem `Co-Authored-By: Claude …`-Trailer.
+  - Keinen `Claude-Session: …`-Trailer in Commits.
 - **Pull Requests:** Gleiche Regel. Die PR-Beschreibung endet mit
   `Co-Authored-By: Claude <noreply@anthropic.com>`, damit Claude als
-  Co-Author sichtbar ist. Ben Waibel (NEXT876) ist der Autor.
+  Co-Author sichtbar ist. Ben Waibel (NEXT876) ist der Autor. Keinen
+  Session-Link (`https://claude.ai/code/session_…`) und keine Zeile
+  „🤖 Generated with Claude Code“ in die PR-Beschreibung.
 
 ## Git-Workflow (gilt immer)
 

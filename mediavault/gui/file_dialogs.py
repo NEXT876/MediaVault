@@ -86,7 +86,7 @@ def _native_pick(
         return [path for path in output.split("\n") if path]
     except (OSError, subprocess.SubprocessError):
         logger.debug(
-            "Nativer Dateidialog fehlgeschlagen, nutze Qt-Dialog", exc_info=True
+            "Native file dialog failed, using the Qt dialog", exc_info=True
         )
         return None
 

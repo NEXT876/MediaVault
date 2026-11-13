@@ -50,7 +50,7 @@ def get_os_thumbnail(video_path: str) -> str:
                 return thumb_path
     except (OSError, ValueError):
         logger.debug(
-            "System-Thumbnail konnte nicht ermittelt werden", exc_info=True
+            "Could not get the system thumbnail", exc_info=True
         )
     return ""
 
@@ -88,5 +88,5 @@ def get_video_frame_image(video_path: str) -> QImage | None:
                 QImage.Format.Format_RGB888,
             ).copy()
     except cv2.error:
-        logger.debug("Videoframe konnte nicht extrahiert werden", exc_info=True)
+        logger.debug("Could not extract a video frame", exc_info=True)
     return None

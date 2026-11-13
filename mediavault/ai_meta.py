@@ -217,7 +217,7 @@ def extract_ai_metadata(path: str) -> dict[str, Any] | None:
     try:
         chunks = _read_text_chunks(path)
     except OSError:
-        logger.warning("Bild konnte nicht gelesen werden: %s", path)
+        logger.warning("Could not read image: %s", path)
         return None
 
     if "prompt" in chunks:
