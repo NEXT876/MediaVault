@@ -240,8 +240,8 @@ ruff check mediavault tests
 - Pull requests target `develop`, use the template and name the type in the
   title (`Feature: …`, `Fix: …`, `Refactor: …`). GitHub squashes on merge, so
   the title becomes the commit message.
-- CI (Ruff and tests) runs on the release pull request from `develop` to
-  `main` and on pushes to `main`.
+- CI (Ruff and tests) runs on every pull request; the release pull request
+  into `main` also updates the coverage badge.
 
 ## License
 
