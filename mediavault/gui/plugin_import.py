@@ -204,10 +204,10 @@ def apply_imported(
     try:
         settings = hook(dict(config.plugins.get(job.key, {})), job.plugin_state)
     except Exception:  # noqa: BLE001 - a plugin bug must not break the queue
-        logger.exception("on_imported von %s fehlgeschlagen", job.key)
+        logger.exception("on_imported of %s failed", job.key)
         return
     if not is_saveable(settings):
-        logger.error("on_imported von %s lieferte ungültige Daten", job.key)
+        logger.error("on_imported of %s returned invalid data", job.key)
         return
     config.plugins[job.key] = settings
     save_configs(configs, active_db_path)

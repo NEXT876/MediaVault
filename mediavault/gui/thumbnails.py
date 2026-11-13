@@ -90,7 +90,7 @@ def _write_cache(entry: MediaItem, image: QImage, scope: str = "") -> None:
         elif os.path.exists(tmp):
             os.remove(tmp)
     except OSError:
-        logger.debug("Vorschau nicht cachebar: %s", path, exc_info=True)
+        logger.debug("Preview not cacheable: %s", path, exc_info=True)
 
 
 def _render(entry: MediaItem, root: str) -> QImage | None:
@@ -104,7 +104,7 @@ def _render(entry: MediaItem, root: str) -> QImage | None:
         path = volumes.absolute_path(entry.image_path, root)
         image = QImage(path) if path else QImage()
         if image.isNull():
-            logger.debug("Bild konnte nicht geladen werden: %s", entry.image_path)
+            logger.debug("Could not load image: %s", entry.image_path)
             return None
         return image
     if entry.entry_type == MediaType.VIDEO:
@@ -156,7 +156,7 @@ def load_thumbnails(
             previews[entry.media_path] = load_thumbnail(entry, root, scope)
         except Exception:  # One bad file must not stop the batch.
             logger.debug(
-                "Vorschau fehlgeschlagen: %s", entry.media_path, exc_info=True
+                "Preview failed: %s", entry.media_path, exc_info=True
             )
             previews[entry.media_path] = None
     return previews

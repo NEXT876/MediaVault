@@ -69,21 +69,21 @@ DEMO_ENTRIES = ("Pizza", "Sushi", "Burger", "Pasta", "Salat", "Döner", "Ramen",
 # Slice colors of the wheel of fortune; vivid enough for both themes and
 # led by the dark theme's primary blue.
 WHEEL_SLICE_COLORS = (
-    "#4f8cff",  # Blau (primary)
-    "#ff6b6b",  # Koralle
-    "#ffd93d",  # Sonnengelb
-    "#2f9e6f",  # Grün
-    "#b983ff",  # Lavendel
-    "#ff9f45",  # Orange
-    "#25c4a8",  # Türkis
-    "#f76fb4",  # Pink
-    "#8ac6ff",  # Hellblau
-    "#c6e86b",  # Limette
-    "#7c6cf6",  # Violett
-    "#ffbf69",  # Apricot
+    "#4f8cff",  # blue (primary)
+    "#ff6b6b",  # coral
+    "#ffd93d",  # sun yellow
+    "#2f9e6f",  # green
+    "#b983ff",  # lavender
+    "#ff9f45",  # orange
+    "#25c4a8",  # turquoise
+    "#f76fb4",  # pink
+    "#8ac6ff",  # light blue
+    "#c6e86b",  # lime
+    "#7c6cf6",  # violet
+    "#ffbf69",  # apricot
 )
 
-_MARGIN = 26.0  # Platz für Zeiger und Schatten
+_MARGIN = 26.0  # room for the pointer and shadow
 
 
 def parse_entries(text: str) -> list[str]:

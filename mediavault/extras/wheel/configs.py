@@ -45,7 +45,7 @@ def load_wheel_configs(path: str = WHEEL_CONFIGS_PATH) -> dict[str, list[str]]:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):
-        logger.warning("Glücksrad-Configs konnten nicht gelesen werden: %s", path)
+        logger.warning("Could not read wheel configs: %s", path)
         return {}
 
 

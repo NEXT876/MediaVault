@@ -1,105 +1,107 @@
+<div align="center">
+
 # MediaVault
+
+**A place to collect the images that matter to you, rate them, and keep rediscovering them.**
 
 [![CI](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/NEXT876/MediaVault/badges/coverage.json)](https://github.com/NEXT876/MediaVault/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/NEXT876/MediaVault?include_prereleases&sort=semver)](https://github.com/NEXT876/MediaVault/releases)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Ein Desktop-Tool zum Verwalten, Bewerten und Durchstöbern von Medien (Bilder und Videos) – mit Bewertungssystem, Zufallsauswahl und Batch-Funktionen.
+![MediaVault library in the dark theme: sidebar, image grid with scores and groups](docs/screenshots/library_dark.png)
 
-![MediaVault-Hauptfenster im dunklen Theme mit Seitenleiste, Bildkacheln, Scores und Gruppen](docs/screenshots/main_window.png)
+</div>
 
-## Überblick
+MediaVault is a desktop app for images and videos, built with Python and PyQt6.
+You rate every item from 1 to 100, sort it into groups, and let MediaVault
+pick something for you: at random, weighted by score, or straight from the
+top of your ranking. Everything stays on your machine in a single JSON file.
 
-MediaVault ("Media Score Tracker") ist eine PyQt6-basierte Desktop-Anwendung, mit der du deine Bilder- und Videosammlung organisierst, bewertest und per Zufall durchstöbern kannst. Alle Einträge werden in einer lokalen JSON-Datei (`~/.mediavault/media_data.json`) gespeichert. Die Oberfläche bietet ein modernes Dark- und Light-Theme.
+> [!NOTE]
+> The user interface is currently in German.
+
+## Who it is for
+
+### Fan art collectors
+
+You follow a handful of artists and want their work in one place instead of
+scattered across bookmarks. An import plugin fetches an artist's latest
+posts, you pick the ones you like in a preview, and MediaVault downloads them
+in the background, skipping anything you already have. Rate what you
+collected, then rediscover it: shuffle through the whole vault, let **Smart
+random** surface high-scoring pieces you have not looked at in a while, or
+sort by score to see your all-time favorites.
+
+### Photographers
+
+You come home with hundreds of shots and need the best ten. Point a config at
+the shoot's folder (local, on a USB stick, or on a cloud drive), let MediaVault
+index it, and rate as you go. Groups keep shoots or subjects apart, batch
+actions rate or regroup many photos at once, and sorting by score turns the
+grid into a shortlist.
+
+![The same library in the light theme](docs/screenshots/library_light.png)
 
 ## Features
 
-- **Medienverwaltung**: Bilder und Videos als Kacheln (Grid) anzeigen, anlegen, bearbeiten und löschen
-- **Mehrfachauswahl**: Klick toggelt eine Kachel, Shift+Klick wählt einen Bereich, Strg+A wählt alles, ein aufgezogenes Rechteck markiert mehrere Kacheln auf einmal; Esc hebt die Auswahl auf
-- **Suche & Sortierung**: Volltextsuche über Titel, Beschreibung, Gruppe und KI-Prompts sowie Sortierung nach Titel, Score oder zuletzt angesehen
-- **Bewertungssystem**: Medien mit einem Score (1–100) bewerten; Bewertungsanzahl und Zeitpunkt der letzten Bewertung werden erfasst
-- **Detailansicht**: Vorschaubild, Statistiken, Beschreibung, direkte Wiedergabe/Öffnen sowie Schnellbewertung über die Buttons `1`–`5` (Doppelklick auf eine Kachel öffnet die Details)
-- **Zufallsauswahl**: Lokaler und globaler Zufall, inkl. "Smart"-Modus (gewichtet nach Score, Aufrufen und letzter Wiedergabe) sowie Zufall innerhalb ausgewählter Gruppen
-- **Batch-Aktionen**: Mehrfachauswahl zum gleichzeitigen Bewerten, Gruppieren und Löschen
-- **Massenimport**: Mehrere Bilder oder Videos auf einmal importieren (Duplikate werden übersprungen)
-- **Thumbnails**: Automatische Vorschaubilder über OS-Thumbnails (nur Linux) bzw. extrahierte Videoframes (via OpenCV); einmal erzeugte Vorschauen liegen als WebP in `~/.mediavault/thumbs` und sind auch ohne Stick da
-- **Stick-Modus**: USB-Stick einstecken, `🔌 Stick einrichten` öffnen, Ordner wählen – entweder als neue Config anlegen oder die aktive Config darauf umstellen. Referenzen werden relativ zur Stick-Identität gespeichert (Marker-Datei `.mediavault-vault`), damit ein anderer Laufwerksbuchstabe nichts kaputt macht
-- **Kopieren beim Hinzufügen**: Bilder und Videos, die von Hand importiert werden, kopiert die App in den Ordner der aktiven Config
-- **Glücksrad**: Unter `🎡 Glücksrad` eigene Einträge (eine Zeile pro Option) eingeben und per Klick, Button oder Strg+Enter drehen – passt sich dem aktiven Theme an. Eintragslisten lassen sich als Configs speichern, anwenden und löschen (`~/.mediavault/wheel_configs.json`); mit einem Klick landen alle oder ausgewählte Gruppen der Bibliothek auf dem Rad (mit Warnung, falls die aktuellen Einträge noch nicht als Config gespeichert sind)
-- **Responsive Grid**: Die Kachelansicht passt die Spaltenanzahl automatisch an die Fenstergröße an
-- **Themes**: Dark und Light live umschaltbar; die Auswahl bleibt über Neustarts erhalten
-- **Import from Web**: Importquellen sind Plugins (siehe [Plugins](#plugins)). Jedes installierte Plugin bekommt einen Eintrag im zuklappbaren Bereich „IMPORT FROM WEB“ der Seitenleiste; ohne Plugins ist der Bereich ausgeblendet
+**Organize**
+- Image and video library shown as a responsive grid of thumbnails
+- Groups, full-text search (title, description, group, AI prompt) and sorting
+  by title, score or last viewed
+- Multi-select by click, Shift+click, rubber band or Ctrl+A, with batch
+  rating, grouping and deleting
+- Bulk import with duplicate detection by content hash
 
-## Tastenkürzel
+**Rate and rediscover**
+- Scores from 1 to 100, quick rating in the detail view, rating count and
+  last-rated time
+- Random picks from the current view or the whole vault, optionally limited
+  to chosen groups
+- **Smart** mode weights picks by score, view count and time since last view
+- A configurable prize wheel for everything else, with saved entry lists and
+  one-click "put my groups on the wheel"
 
-| Kürzel | Aktion |
-| --- | --- |
-| Klick | Kachel aus-/abwählen |
-| Shift+Klick | Bereich ab der zuletzt angeklickten Kachel auswählen |
-| Ziehen | Auswahlrechteck über mehrere Kacheln |
-| Strg+A | Alle sichtbaren Kacheln auswählen |
-| Esc | Auswahl aufheben |
-| Entf | Ausgewählte Einträge löschen |
-| Strg+F | Suche fokussieren |
-| Doppelklick | Detailansicht öffnen |
+**Storage**
+- Several libraries ("configs"), each with its own folder and database
+- **Stick mode**: keep a library on a USB stick; paths are stored relative to
+  a marker file, so a new drive letter breaks nothing
+- Thumbnails are cached as WebP in `~/.mediavault/thumbs` and stay available
+  while the stick is unplugged
+- Works on top of `rclone mount` without downloading whole videos
+  (see [Cloud storage](#cloud-storage-with-rclone))
 
-## Projektstruktur
+**Extensible**
+- Import sources are plugins: drop a folder into `plugins/` and it shows up
+  in the sidebar (see [Plugins](#plugins))
+- Reads AI generation metadata (prompt, model, seed, sampler) from PNGs and
+  offers a prompt analysis
 
-Drei Schichten, von innen nach außen: **Datenklassen** (`models/`) kennen
-nichts anderes, die **Logik** (Module direkt in `mediavault/`) kommt ohne Qt
-aus, die **Oberfläche** (`gui/`) verdrahtet alles. Optionale Extras wie das
-Glücksrad liegen in `extras/` und werden nur vom Hauptfenster eingebunden.
-Tests (`test_models_boundary.py`, `test_extras_boundary.py`) halten diese
-Grenzen fest.
+**Comfortable**
+- Dark and light theme, switchable at runtime and remembered across restarts
 
-```
-mediavault/
-├── __main__.py        # Einstiegspunkt, Splash-Screen
-├── models/            # Reine Datenklassen ohne Logik, importieren nichts aus der App
-│   ├── media.py       # MediaItem, MediaType
-│   ├── vault.py       # VaultConfig, LibraryRoot, VolumeInfo, Modi
-│   ├── results.py     # ImportResult, CopyResult, DownloadResult
-│   └── posts.py       # RemotePost, FetchResult (Plugin-Daten)
-├── config.py          # Configs laden/speichern, Datenbankpfade, Stick-Auflösung, Logging
-├── database.py        # MediaDatabase: Laden, atomares Speichern, Zufallsauswahl
-├── library.py         # Filtern/Sortieren fürs Raster, Ordner indexieren
-├── importer.py        # Import mit Duplikaterkennung
-├── scanner.py         # Neue Medien in einem Ordner finden
-├── transfer.py        # Dateien in den Mediathek-Ordner kopieren
-├── volumes.py         # Stick-Marker und relative Pfade
-├── ai_meta.py         # KI-Metadaten (Prompt, Seed, Modell) aus PNGs lesen
-├── plugins.py         # Plugin-Schnittstelle und -Erkennung
-├── remote.py          # Downloads und Import von Plugin-Posts
-├── media_preview.py   # Videoframes und System-Thumbnails
-├── extras/            # Optionale Extras, nicht Teil des Kerns
-│   └── wheel/         # Glücksrad
-│       ├── page.py    # Rad und Seite mit Editor und Ergebnis
-│       ├── group_dialog.py # Gruppen der Bibliothek aufs Rad
-│       └── configs.py # Gespeicherte Eintragslisten
-└── gui/
-    ├── main_window.py # Hauptfenster: verdrahtet Seitenleiste, Raster, Dialoge, Extras
-    ├── sidebar.py     # Seitenleiste mit Navigation und Statusanzeigen
-    ├── card_grid.py   # Kachelraster, Auswahl, Vorschauen im Hintergrund laden
-    ├── thumbnails.py  # Vorschaubilder erzeugen, WebP-Cache in ~/.mediavault/thumbs
-    ├── worker.py      # Hintergrund-Thread für eine blockierende Aufgabe
-    ├── selection.py   # Auswahlrechteck mit Auto-Scroll
-    ├── widgets.py     # Medienkacheln, Button- und Label-Helfer
-    ├── collapsible.py # Einklappbare Seitenleisten-Sektion
-    ├── folder_sync.py # Ordner-Sync mit Vorschau und Import
-    ├── plugin_import.py # Plugin-Import: Einstellungen, Posts holen, einreihen
-    ├── preview_dialog.py # Auswahl der geholten Posts
-    ├── downloads.py   # Download-Warteschlange
-    ├── stick_banner.py # Angebot, einen neuen, noch ungenutzten Stick einzurichten
-    ├── stick_dialog.py # Config an einen Ordner auf dem Stick binden
-    ├── dialogs.py     # Detail-, Bearbeiten-, Zufalls- und Config-Dialoge
-    ├── file_dialogs.py # Native Dateiauswahl, Dateien öffnen
-    └── theme.py       # Dark-/Light-Paletten und QSS
-tests/
-plugins/               # Import-Plugins, private/ wird nicht eingecheckt
+![The prize wheel](docs/screenshots/wheel.png)
+
+## Installation
+
+### Windows
+
+A standalone `.exe` that needs no Python will be attached to the
+[releases](https://github.com/NEXT876/MediaVault/releases). Until the first
+release, install from source as described below.
+
+### From source
+
+Requires Python 3.10 or newer.
+
+```bash
+git clone https://github.com/NEXT876/MediaVault.git
 ```
 
-## Start
-
-Python 3.10 oder neuer. Aus dem Repository-Ordner:
+```bash
+cd MediaVault
+```
 
 ```bash
 pip install -e .
@@ -109,11 +111,115 @@ pip install -e .
 python -m mediavault
 ```
 
-Abhängigkeiten: `PyQt6`, `opencv-python` (für Videovorschauen). Plugins werden
-aus `plugins/` neben dem Paket geladen, deshalb die App aus dem Repository
-starten.
+Plugins are loaded from the `plugins/` folder next to the package, so start
+the app from the repository folder.
 
-## Entwicklung
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| Click | Select or deselect a tile |
+| Shift+Click | Select a range from the last clicked tile |
+| Drag | Rubber-band selection across tiles |
+| Ctrl+A | Select all visible tiles |
+| Esc | Clear the selection |
+| Delete | Delete the selected entries |
+| Ctrl+F | Focus the search field |
+| Double-click | Open the detail view |
+| Ctrl+Enter | Spin the prize wheel |
+
+## Plugins
+
+An import plugin is a folder with an `__init__.py` that defines `PLUGIN`.
+MediaVault discovers plugins in `plugins/` (committed) and `plugins/private/`
+(local only, ignored by git) at startup. A plugin only fetches posts; the
+preview, download queue and duplicate-aware import are provided by the app.
+Without plugins the "IMPORT FROM WEB" section of the sidebar stays hidden.
+
+The interface and a complete example are documented in
+[plugins/README.md](plugins/README.md).
+
+## Cloud storage with rclone
+
+A cloud folder mounted with `rclone mount` works like any local folder.
+MediaVault never reads a whole video for indexing: the duplicate hash uses
+only the first and last MiB, and the thumbnail a single frame at about two
+seconds. Once cached in `~/.mediavault/thumbs`, the original is not touched
+again until you play it. With a mount like this, a scan downloads only a few
+MB per video:
+
+```bash
+rclone mount remote:Media ~/Cloud --vfs-cache-mode full --vfs-cache-max-size 20G --vfs-read-chunk-size 8M --buffer-size 0 --dir-cache-time 1h
+```
+
+- `--vfs-cache-mode full` caches only the chunks that were read, not whole files
+- `--vfs-read-chunk-size 8M --buffer-size 0` prevents large read-ahead during
+  the thumbnail scan
+- `--vfs-cache-max-size` caps the local space used by watched videos
+- Images are read in full for their thumbnail (usually small, so harmless)
+- File managers such as Nautilus or Dolphin create their own thumbnails and
+  download far more; turn those off for network or FUSE folders
+- After the first scan, `du -sh ~/.cache/rclone/vfs` shows how much was
+  actually downloaded
+
+## Project structure
+
+Three layers, from the inside out: **data classes** (`models/`) depend on
+nothing else, the **logic** (modules directly in `mediavault/`) works without
+Qt, and the **GUI** (`gui/`) wires everything together. Optional extras such
+as the prize wheel live in `extras/` and are only used by the main window.
+Boundary tests (`test_models_boundary.py`, `test_extras_boundary.py`) keep
+these rules in place.
+
+```
+mediavault/
+├── __main__.py         # entry point, splash screen
+├── models/             # plain data classes, import nothing from the app
+│   ├── media.py        # MediaItem, MediaType
+│   ├── vault.py        # VaultConfig, LibraryRoot, VolumeInfo, modes
+│   ├── results.py      # ImportResult, CopyResult, DownloadResult
+│   └── posts.py        # RemotePost, FetchResult (plugin data)
+├── config.py           # load/save configs, database paths, stick lookup, logging
+├── database.py         # MediaDatabase: loading, atomic saving, random picks
+├── library.py          # filtering/sorting for the grid, folder indexing
+├── importer.py         # import with duplicate detection
+├── scanner.py          # find new media in a folder
+├── transfer.py         # copy files into the library folder
+├── volumes.py          # stick marker and relative paths
+├── ai_meta.py          # read AI metadata (prompt, seed, model) from PNGs
+├── plugins.py          # plugin interface and discovery
+├── remote.py           # download and import plugin posts
+├── media_preview.py    # video frames and system thumbnails
+├── extras/             # optional extras, not part of the core
+│   └── wheel/          # prize wheel
+│       ├── page.py         # wheel and page with editor and result
+│       ├── group_dialog.py # put library groups on the wheel
+│       └── configs.py      # saved entry lists
+└── gui/
+    ├── main_window.py  # main window: wires sidebar, grid, dialogs, extras
+    ├── sidebar.py      # navigation and status
+    ├── card_grid.py    # tile grid, selection, background thumbnail loading
+    ├── thumbnails.py   # create thumbnails, WebP cache in ~/.mediavault/thumbs
+    ├── worker.py       # background thread for one blocking task
+    ├── selection.py    # rubber band with auto-scroll
+    ├── widgets.py      # media tiles, button and label helpers
+    ├── collapsible.py  # collapsible sidebar section
+    ├── folder_sync.py  # folder sync with preview and import
+    ├── plugin_import.py  # plugin import: settings, fetching, queueing
+    ├── preview_dialog.py # pick fetched posts
+    ├── downloads.py    # download queue
+    ├── stick_banner.py # offer to set up a newly plugged-in stick
+    ├── stick_dialog.py # bind a config to a folder on a stick
+    ├── dialogs.py      # detail, edit, random and config dialogs
+    ├── file_dialogs.py # native file pickers, opening files
+    └── theme.py        # dark/light palettes and QSS
+tests/
+plugins/                # import plugins; private/ is not committed
+```
+
+## Contributing
+
+Set up a development install:
 
 ```bash
 pip install -e ".[dev]"
@@ -127,35 +233,16 @@ QT_QPA_PLATFORM=offscreen pytest -q
 ruff check mediavault tests
 ```
 
-- `develop` ist der Arbeitsstand, `main` enthält nur Releases (ein Squash-Commit
-  pro Release, siehe CI unten).
-- Branches beginnen mit ihrer Art: `feature/`, `fix/`, `refactor/`, `docs/`,
-  `test/`, `chore/` (z. B. `feature/duel-mode`).
-- PRs gehen nach `develop`, nutzen die Vorlage und nennen den Typ im Titel
-  (`Feature: …`, `Fix: …`, `Refactor: …`). GitHub squasht beim Merge automatisch
-  (der PR-Titel wird zur Commit-Message) und löscht den Branch danach.
-- Commits direkt auf `develop` beginnen ebenfalls mit dem Typ (`Fix: …`, `Docs: …`).
-- Die CI (Ruff und Tests) läuft beim Release-PR von `develop` nach `main` und
-  bei Pushes auf `main`.
+- `develop` is the working branch; `main` only receives releases (one squash
+  commit per release).
+- Branch names start with their type: `feature/`, `fix/`, `refactor/`,
+  `docs/`, `test/`, `chore/` (for example `feature/duel-mode`).
+- Pull requests target `develop`, use the template and name the type in the
+  title (`Feature: …`, `Fix: …`, `Refactor: …`). GitHub squashes on merge, so
+  the title becomes the commit message.
+- CI (Ruff and tests) runs on every pull request; the release pull request
+  into `main` also updates the coverage badge.
 
-## Plugins
+## License
 
-Importquellen liegen als Ordner in `plugins/` (eingecheckt) oder
-`plugins/private/` (nur lokal, von git ignoriert). Installieren heißt: Ordner
-hineinkopieren und die App neu starten. Wie man ein Plugin schreibt, steht in
-[plugins/README.md](plugins/README.md).
-
-## Cloud-Speicher mit rclone
-
-Ein Cloud-Ordner lässt sich mit `rclone mount` wie ein lokaler Ordner einbinden und dann ganz normal als Speicherort auswählen. MediaVault liest von Videos nie die ganze Datei: Der Hash nimmt nur die erste und letzte MiB, die Vorschau nur einen Frame bei etwa 2 Sekunden. Fertige Vorschauen liegen danach in `~/.mediavault/thumbs`, das Original wird dafür nicht mehr angefasst. Mit dem passenden Mount lädt rclone deshalb beim Scan nur wenige MB pro Video, das ganze Video erst beim Abspielen:
-
-```bash
-rclone mount remote:Medien ~/Cloud --vfs-cache-mode full --vfs-cache-max-size 20G --vfs-read-chunk-size 8M --buffer-size 0 --dir-cache-time 1h
-```
-
-- `--vfs-cache-mode full` speichert nur die gelesenen Stücke lokal, nicht die ganzen Dateien
-- `--vfs-read-chunk-size 8M --buffer-size 0` verhindert großes Vorauslesen beim Vorschau-Scan
-- `--vfs-cache-max-size` begrenzt den Platz, den angeschaute Videos lokal belegen
-- Bilder werden für die Vorschau komplett geladen (meist klein, also unkritisch)
-- Dateimanager wie Nautilus oder Dolphin erzeugen beim Öffnen des Ordners eigene Vorschauen und laden dabei viel mehr – dort die Vorschau für Netz-/FUSE-Ordner abschalten
-- Prüfen: Nach dem ersten Scan zeigt `du -sh ~/.cache/rclone/vfs`, wie viel tatsächlich geladen wurde
+[MIT](LICENSE) © Ben Waibel

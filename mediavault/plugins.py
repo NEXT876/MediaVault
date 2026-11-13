@@ -53,24 +53,24 @@ def _load(folder: Path) -> Any:
         module_name, folder / "__init__.py", submodule_search_locations=[str(folder)]
     )
     if spec is None or spec.loader is None:
-        raise ImportError("kein ladbares Paket")
+        raise ImportError("not a loadable package")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
         factory = getattr(module, "PLUGIN", None)
         if factory is None:
-            raise AttributeError("PLUGIN fehlt")
+            raise AttributeError("PLUGIN missing")
         plugin = factory()
     except BaseException:
         sys.modules.pop(module_name, None)
         raise
     name = getattr(plugin, "name", None)
     if not isinstance(name, str) or not name.strip():
-        raise TypeError("name fehlt")
+        raise TypeError("name missing")
     for method in ("configure", "fetch"):
         if not callable(getattr(plugin, method, None)):
-            raise TypeError(f"{method} fehlt")
+            raise TypeError(f"{method} missing")
     return plugin
 
 
@@ -104,18 +104,18 @@ def discover_plugins(root: Path = PLUGIN_ROOT) -> dict[str, ImportPlugin]:
     names: set[str] = set()
     for folder in _candidates(root):
         if folder.name in plugins:
-            logger.warning("Plugin-Ordner doppelt, übersprungen: %s", folder)
+            logger.warning("Duplicate plugin folder, skipped: %s", folder)
             continue
         try:
             plugin = _load(folder)
         except Exception as exc:  # noqa: BLE001 - any plugin bug must not stop the app
             logger.warning(
-                "Plugin %s übersprungen: %s: %s", folder, type(exc).__name__, exc
+                "Plugin %s skipped: %s: %s", folder, type(exc).__name__, exc
             )
             continue
         if plugin.name in names:
             logger.warning(
-                "Plugin-Name %r doppelt, übersprungen: %s", plugin.name, folder
+                "Duplicate plugin name %r, skipped: %s", plugin.name, folder
             )
             continue
         names.add(plugin.name)
@@ -159,11 +159,11 @@ def migrate_settings(
                 settings = migrate(extra)
             except Exception:  # noqa: BLE001 - a broken migration must not stop the app
                 logger.warning(
-                    "Migration von %s fehlgeschlagen", plugin.name, exc_info=True
+                    "Migration of %s failed", plugin.name, exc_info=True
                 )
                 continue
             if settings is not None and not is_saveable(settings):
-                logger.warning("Migration von %s lieferte ungültige Daten", plugin.name)
+                logger.warning("Migration of %s returned invalid data", plugin.name)
                 continue
             if settings is not None:
                 config.plugins[key] = settings
@@ -174,7 +174,7 @@ def migrate_settings(
 
 def _bug(plugin: ImportPlugin, exc: BaseException) -> PluginError:
     """Turn an unexpected exception into a message without its text (may hold keys)."""
-    logger.error("Plugin %s fehlgeschlagen", plugin.name, exc_info=exc)
+    logger.error("Plugin %s failed", plugin.name, exc_info=exc)
     return PluginError(f"{plugin.name} ist fehlgeschlagen: {type(exc).__name__}")
 
 
@@ -182,7 +182,7 @@ def _invalid(plugin: ImportPlugin, value: Any) -> PluginError:
     """Report a fetch result of the wrong type, naming only the type."""
     name = type(value).__name__
     logger.error(
-        "Plugin %s lieferte %s statt FetchResult/RemotePost", plugin.name, name
+        "Plugin %s returned %s instead of FetchResult/RemotePost", plugin.name, name
     )
     return PluginError(f"{plugin.name} hat ein ungültiges Ergebnis geliefert: {name}")
 
@@ -259,7 +259,7 @@ def run_fetch(
                 custom(item) if callable(custom) else default_preview(item.preview_url)
             )
         except Exception:  # noqa: BLE001 - a missing thumbnail is not worth failing for
-            logger.warning("Vorschau von %s fehlgeschlagen", plugin.name, exc_info=True)
+            logger.warning("Preview of %s failed", plugin.name, exc_info=True)
             continue
         if data:
             previews[item.id] = data

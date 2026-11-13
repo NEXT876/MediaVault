@@ -83,7 +83,7 @@ class MediaDatabase:
                     os.path.dirname(os.path.abspath(self.filepath)), exist_ok=True
                 )
             except OSError:
-                logger.warning("Datenordner nicht anlegbar: %s", self.filepath)
+                logger.warning("Could not create data folder: %s", self.filepath)
             if not os.path.exists(self.filepath):
                 return
             try:
@@ -92,20 +92,20 @@ class MediaDatabase:
                     if not isinstance(data, list) or not all(
                         isinstance(item, dict) for item in data
                     ):
-                        raise ValueError("Unerwartetes Datenformat")
+                        raise ValueError("Unexpected data format")
                     self.entries = [MediaItem.from_dict(item) for item in data]
             except OSError as exc:
-                logger.error("Datenbank nicht lesbar: %s", self.filepath)
+                logger.error("Database not readable: %s", self.filepath)
                 self.load_error = f"Datei nicht lesbar: {exc}"
                 self.read_only = True
             except (json.JSONDecodeError, ValueError):
-                logger.error("JSON beschädigt: %s", self.filepath)
+                logger.error("Corrupt JSON: %s", self.filepath)
                 self.load_error = "Datei beschädigt"
                 backup = f"{self.filepath}.corrupt.{int(time.time())}"
                 with suppress(OSError):
                     shutil.copy(self.filepath, backup)
                     self.backup_path = backup
-                    logger.info("Backup angelegt: %s", backup)
+                    logger.info("Backup created: %s", backup)
 
     def relativize(self, root: str) -> int:
         """Store paths inside a volume root relative to it and save if anything changed.
@@ -140,7 +140,7 @@ class MediaDatabase:
         """
         with self._lock:
             if self.read_only:
-                logger.warning("Nicht gespeichert, Datei war unlesbar: %s", self.filepath)
+                logger.warning("Not saved, file was unreadable: %s", self.filepath)
                 return
             parent = os.path.dirname(os.path.abspath(self.filepath))
             os.makedirs(parent, exist_ok=True)
